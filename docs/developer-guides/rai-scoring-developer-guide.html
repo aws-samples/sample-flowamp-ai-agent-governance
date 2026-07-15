@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAI Scoring — FlowAMP Developer Guide</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --code-bg: #0d1117; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: #fff; }
+  p, li { color: var(--text); margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  .signal-box { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); white-space: pre-wrap; overflow-x: auto; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; overflow-x: auto; }
+  code { font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); }
+  .inline-code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--accent); }
+  ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { padding: 0.75rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--card); color: var(--accent); }
+  td { background: var(--bg); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .badge-demo { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .badge-prod { background: rgba(74,222,128,0.15); color: var(--green); }
+  .pillar-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .pillar-icon { font-size: 1.5rem; }
+  .weight { color: var(--muted); font-size: 0.85rem; }
+  .scoring-formula { background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.2); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; }
+  .scoring-formula code { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>🛡️ Responsible AI Scoring — FlowAMP Developer Guide</h1>
+<p class="subtitle">FlowAMP AI Agent Governance · How RAI scoring works today and what still needs hardening</p>
+
+<div class="card">
+  <strong>Context:</strong> The <span class="inline-code">rai-scorer</span> Lambda runs once a day on an EventBridge schedule (and on demand via <span class="inline-code">POST /rai/score</span>) and computes four equally-weighted sub-scores — fairness, transparency, accountability, ethics — per registered agent, plus a weighted overall score. It reads <em>real</em> CloudWatch and CloudTrail signals today. But in a fresh account most of those signals do not exist yet: CloudWatch metric queries return <span class="inline-code">0</span>, CloudTrail lookups return no events, and every sub-score sits at its <strong>base value</strong> until real agent traffic and guardrail activity accrue. This guide documents exactly what is computed now versus what still needs to be wired up for a production-grade signal, and keeps the honest gap marked with badges.
+</div>
+
+<div class="card" style="border-color: var(--yellow);">
+  <strong>⚠️ Honest state:</strong> RAI scoring is <em>real but partly seed-shaped</em> right now. The scorer executes real API calls, but because a fresh FlowAMP deployment has no accumulated invocation history, guardrail metrics, or CloudTrail volume, the arithmetic collapses to the base constants below. Scores <em>move</em> only once agents are actually invoked, guardrails are attached and intervening, and CloudTrail has 24h of coverage. The UI also seeds an illustrative fleet (<span class="inline-code">aiScoresData</span> in <span class="inline-code">agent-management.html</span>) and overwrites a row's F/T/A/E only when the backend returns a non-zero <span class="inline-code">score</span> for that agent — so seeded demo numbers and live computed numbers can coexist until every agent has a real score.
+</div>
+
+<h2>Architecture Overview</h2>
+
+<div class="card">
+<pre><code>EventBridge (rate: 1 day)          UI "⟳ Re-score now"  →  POST /rai/score
+        │                                                        │
+        └──────────────────────────┬─────────────────────────────┘
+                                    ▼
+                        ┌──────────────────────┐
+                        │  rai-scorer Lambda    │   handler() dual-mode:
+                        │  (Python 3.12)        │   schedule → plain dict
+                        │  index.handler        │   API event → proxy resp
+                        └──────────┬────────────┘
+                                   │ reads signals
+              ┌────────────────────┼────────────────────┐
+              ▼                    ▼                     ▼
+     ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
+     │  CloudWatch  │     │  CloudTrail  │     │  DynamoDB         │
+     │ GetMetric-   │     │ LookupEvents │     │  AgentTable       │
+     │ Statistics   │     │ (ResourceName│     │  (single table)   │
+     │ ListMetrics  │     │  attribute)  │     │  read INFO rows + │
+     └──────────────┘     └──────────────┘     │  write scores back│
+                                               └──────────────────┘</code></pre>
+</div>
+
+<p>There is a single <span class="inline-code">AgentTable</span> (partition key <span class="inline-code">agentId</span>, sort key <span class="inline-code">sk</span>). The scorer scans for entity rows only — <span class="inline-code">sk = 'INFO'</span> — then drops any <span class="inline-code">agentId</span> prefixed <span class="inline-code">compliance:</span>, <span class="inline-code">aop:</span>, or <span class="inline-code">access:</span>, and skips agents whose <span class="inline-code">status</span> is <span class="inline-code">decommissioned</span>. For each remaining agent it computes the four sub-scores and the overall, applies the NIST RMF modifier, and writes the results <strong>back onto the same INFO row</strong> as <span class="inline-code">0–100</span> integers (see §6 for the exact write shape).</p>
+
+<div class="card" style="border-color: var(--green);">
+  <strong>Deployed today:</strong> The three core agents — <span class="inline-code">management</span>, <span class="inline-code">discovery-scanner</span>, and <span class="inline-code">compliance-scanner</span> — always deploy. Bedrock agents run on the <span class="inline-code">us.anthropic.claude-sonnet-4-6</span> inference profile. The <span class="inline-code">rai-scorer</span> is a plain Lambda (not an AgentCore runtime); the <span class="inline-code">compliance-scanner</span> is a separate daily <em>auditor</em> that produces A–F audit reports — it does <strong>not</strong> write RAI scores (see §7).
+</div>
+
+<h2>1. Fairness <span class="weight">(25% weight)</span></h2>
+
+<div class="card">
+  <div class="pillar-header">
+    <span class="pillar-icon">⚖️</span>
+    <div>
+      <strong>Goal:</strong> Detect and prevent biased or unfair outputs from agents.
+    </div>
+  </div>
+
+  <h3>What the scorer does today <span class="badge badge-demo">REAL, BASE UNTIL SIGNALS</span></h3>
+  <p>Reads the CloudWatch metric <span class="inline-code">AWS/Bedrock → GuardrailInterventions</span> with dimension <span class="inline-code">AgentId</span>, and the agent's own <span class="inline-code">requests</span>/<span class="inline-code">errors</span> fields from its DynamoDB INFO row. It starts from a base of <strong>95</strong> and penalizes for the intervention rate and error rate. In a fresh account the guardrail metric returns <span class="inline-code">0</span> and <span class="inline-code">requests</span> defaults to 1, so the score sits at <strong>95</strong>.</p>
+
+  <h3>Actual code <span class="badge badge-prod">assetsSrc/lambda/rai-scorer/index.py</span></h3>
+  <pre><code>def score_fairness(agent):
+    invocations = agent.get('requests', 0) or 1
+    errors = agent.get('errors', 0)
+    error_rate = errors / max(invocations, 1)
+
+    # Bedrock Guardrail interventions (0 until a guardrail is attached + firing)
+    guardrail_interventions = get_metric(
+        'AWS/Bedrock', 'GuardrailInterventions',
+        [{'Name': 'AgentId', 'Value': agent['agentId']}])
+    intervention_rate = guardrail_interventions / max(invocations, 1)
+
+    # Base 95, penalized by intervention rate and error rate
+    score = 95 - (intervention_rate * 100 * 0.5) - (error_rate * 100 * 0.3)
+    return max(50, min(100, round(score)))</code></pre>
+
+  <h3>Still to harden <span class="badge badge-prod">TODO</span></h3>
+  <ul>
+    <li><strong>Attach a Bedrock Guardrail</strong> to each agent so <span class="inline-code">GuardrailInterventions</span> is actually emitted under <span class="inline-code">AWS/Bedrock</span>. Note the current dimension key is <span class="inline-code">AgentId</span> — verify the real metric dimension (Bedrock also emits under <span class="inline-code">GuardrailId</span>/<span class="inline-code">GuardrailVersion</span>) and align it.</li>
+    <li><strong>Invocation-log sampling</strong> — enable Bedrock model invocation logging to S3, sample input/output pairs, and run a bias classifier for demographic disparity.</li>
+    <li><strong>Human feedback loop</strong> — persist operator thumbs-up/down; disproportionate negative feedback on an input category is a fairness signal.</li>
+  </ul>
+</div>
+
+<h2>2. Transparency <span class="weight">(25% weight)</span></h2>
+
+<div class="card">
+  <div class="pillar-header">
+    <span class="pillar-icon">🔍</span>
+    <div>
+      <strong>Goal:</strong> Ensure agent decisions are auditable and traceable.
+    </div>
+  </div>
+
+  <h3>What the scorer does today <span class="badge badge-demo">REAL, BASE UNTIL SIGNALS</span></h3>
+  <p>Calls <span class="inline-code">cloudtrail:LookupEvents</span> filtered by the <span class="inline-code">ResourceName</span> attribute (the <span class="inline-code">agentId</span>, and a fallback lookup for <span class="inline-code">agent-handler</span>), and scales a base of <strong>80</strong> up toward 100 as CloudTrail coverage grows (20+ events/day = full coverage). It is deliberately blunt — it counts events, it does not distinguish event types or check whether invocation logging is enabled. With no CloudTrail history the count is <span class="inline-code">0</span> and the score sits at <strong>80</strong>.</p>
+
+  <h3>Actual code <span class="badge badge-prod">assetsSrc/lambda/rai-scorer/index.py</span></h3>
+  <pre><code>def score_transparency(agent):
+    resource_id = agent['agentId']
+    trail_events = count_cloudtrail_events(resource_id)
+
+    # Fallback lookup on the shared handler name if the agent has no events
+    fn_events = count_cloudtrail_events("agent-handler") if not trail_events else trail_events
+
+    total_events = trail_events + fn_events
+    coverage = min(total_events / 20, 1.0)   # 20+ events/day = full coverage
+
+    score = 80 + (coverage * 20)             # base 80, up to 100
+    return max(50, min(100, round(score)))</code></pre>
+
+  <h3>Still to harden <span class="badge badge-prod">TODO</span></h3>
+  <ul>
+    <li><strong>Distinguish event types</strong> — verify <span class="inline-code">bedrock:InvokeAgent</span>, <span class="inline-code">bedrock:InvokeModel</span>, and <span class="inline-code">lambda:Invoke</span> events actually exist per agent, rather than counting any event mentioning the name.</li>
+    <li><strong>Check invocation logging is enabled</strong> — call <span class="inline-code">GetModelInvocationLoggingConfiguration</span> and reward agents whose full input/output logging to S3/CloudWatch Logs is on. This requires adding <span class="inline-code">bedrock:GetModelInvocationLoggingConfiguration</span> to the scorer role (not granted today).</li>
+    <li><strong>Agent trace visibility</strong> — reward <span class="inline-code">enableTrace</span> on agent invocations so operators can see <em>why</em> a decision was made. With AgentCore, prefer Observability OTEL spans.</li>
+    <li><strong>Log-group existence</strong> — <span class="inline-code">logs:DescribeLogGroups</span> for the agent's Lambda (not granted today).</li>
+  </ul>
+</div>
+
+<h2>3. Accountability <span class="weight">(25% weight)</span></h2>
+
+<div class="card">
+  <div class="pillar-header">
+    <span class="pillar-icon">📋</span>
+    <div>
+      <strong>Goal:</strong> Ensure failures are handled properly and someone is responsible.
+    </div>
+  </div>
+
+  <h3>What the scorer does today <span class="badge badge-demo">REAL, BASE UNTIL SIGNALS</span></h3>
+  <p>Computes an error rate from the INFO row's <span class="inline-code">requests</span>/<span class="inline-code">errors</span> fields, and queries <span class="inline-code">AWS/Lambda → Errors</span> for the shared function name <span class="inline-code">AgentHandlerFn</span> over 7 days purely to confirm error monitoring exists (a small +2 bonus). It starts from a base of <strong>95</strong>. It does <em>not</em> yet verify DLQs, alarms, or ownership. In a fresh account the error rate is 0, so the score sits at <strong>95</strong> (or 97 with the monitoring bonus).</p>
+
+  <h3>Actual code <span class="badge badge-prod">assetsSrc/lambda/rai-scorer/index.py</span></h3>
+  <pre><code>def score_accountability(agent):
+    invocations = agent.get('requests', 0) or 1
+    errors = agent.get('errors', 0)
+    error_rate = errors / max(invocations, 1)
+
+    # Confirm error monitoring exists (shared handler name), 7-day window
+    error_log_events = get_metric(
+        'AWS/Lambda', 'Errors',
+        [{'Name': 'FunctionName', 'Value': 'AgentHandlerFn'}],
+        stat='Sum', hours=168)
+    has_error_monitoring = 1 if error_log_events is not None else 0
+
+    # Base 95, penalize error rate, small bonus for monitoring
+    score = 95 - (error_rate * 100 * 0.8) + (has_error_monitoring * 2)
+    return max(50, min(100, round(score)))</code></pre>
+
+  <h3>Still to harden <span class="badge badge-prod">TODO</span></h3>
+  <ul>
+    <li><strong>Per-agent Lambda error rate</strong> — query <span class="inline-code">AWS/Lambda → Errors/Invocations</span> by the agent's own <span class="inline-code">FunctionName</span> instead of the shared <span class="inline-code">AgentHandlerFn</span> constant.</li>
+    <li><strong>Dead Letter Queue</strong> — <span class="inline-code">lambda:GetFunctionConfiguration</span> → check <span class="inline-code">DeadLetterConfig</span> exists (not granted today).</li>
+    <li><strong>CloudWatch Alarms</strong> — <span class="inline-code">cloudwatch:DescribeAlarms</span> filtered by agent resources (not granted today).</li>
+    <li><strong>Ownership + staleness</strong> — penalize INFO rows with no <span class="inline-code">owner</span> and a stale <span class="inline-code">lastUpdated</span> (&gt; 180 days). The fields exist in the schema; the scorer does not read them yet.</li>
+  </ul>
+</div>
+
+<h2>4. Ethics <span class="weight">(25% weight)</span></h2>
+
+<div class="card">
+  <div class="pillar-header">
+    <span class="pillar-icon">🧭</span>
+    <div>
+      <strong>Goal:</strong> Ensure agents avoid harmful content and protect PII.
+    </div>
+  </div>
+
+  <h3>What the scorer does today <span class="badge badge-demo">REAL, BASE UNTIL SIGNALS</span></h3>
+  <p>Reads two CloudWatch metrics under <span class="inline-code">AWS/Bedrock</span> with dimension <span class="inline-code">AgentId</span>: <span class="inline-code">GuardrailBlocked</span> and <span class="inline-code">GuardrailPiiRedacted</span>. It starts from a base of <strong>93</strong>, adds a small +3 bonus for active PII protection, and penalizes only when the block rate is very high (&gt; 5%). In a fresh account both metrics are <span class="inline-code">0</span>, the PII-protection flag is still set (because <span class="inline-code">guardrail_blocks &gt;= 0</span> is trivially true), and the score sits at <strong>96</strong>.</p>
+
+  <h3>Actual code <span class="badge badge-prod">assetsSrc/lambda/rai-scorer/index.py</span></h3>
+  <pre><code>def score_ethics(agent):
+    invocations = agent.get('requests', 0) or 1
+
+    guardrail_blocks = get_metric(
+        'AWS/Bedrock', 'GuardrailBlocked',
+        [{'Name': 'AgentId', 'Value': agent['agentId']}])
+    block_rate = guardrail_blocks / max(invocations, 1)
+
+    pii_redactions = get_metric(
+        'AWS/Bedrock', 'GuardrailPiiRedacted',
+        [{'Name': 'AgentId', 'Value': agent['agentId']}])
+    has_pii_protection = 1 if pii_redactions > 0 or guardrail_blocks >= 0 else 0
+
+    # Base 93, +3 for PII protection, penalty only for a high block rate
+    score = 93 + (has_pii_protection * 3) - (max(block_rate - 0.05, 0) * 100 * 0.5)
+    return max(50, min(100, round(score)))</code></pre>
+
+  <h3>Still to harden <span class="badge badge-prod">TODO</span></h3>
+  <ul>
+    <li><strong>Configuration checks over runtime metrics</strong> — call <span class="inline-code">bedrock:GetAgent</span> to verify a guardrail is actually attached, and <span class="inline-code">bedrock:GetGuardrail</span> to confirm content, PII, and denied-topic policies are configured. Neither action is on the scorer role today. An agent with no guardrail should drop hard, not sit at 96.</li>
+    <li><strong>Fix the trivially-true PII flag</strong> — <span class="inline-code">guardrail_blocks &gt;= 0</span> is always true, so the +3 bonus is unconditional. Gate it on real PII-redaction activity or on a verified guardrail policy.</li>
+    <li><strong>Verify the metric dimension</strong> — confirm <span class="inline-code">GuardrailBlocked</span>/<span class="inline-code">GuardrailPiiRedacted</span> are the real Bedrock metric names and that <span class="inline-code">AgentId</span> is the emitted dimension.</li>
+  </ul>
+</div>
+
+<h2>5. System-Level: NIST RMF Modifier</h2>
+
+<div class="card">
+  <div class="pillar-header">
+    <span class="pillar-icon">🏛️</span>
+    <div>
+      <strong>Goal:</strong> Weak system-level risk posture should drag down all agent scores.
+    </div>
+  </div>
+
+  <h3>What the scorer does today <span class="badge badge-demo">REAL, DDB-BACKED</span></h3>
+  <p>Reads the <span class="inline-code">compliance:nist-sp800-37</span> INFO row from the AgentTable, takes its <span class="inline-code">complianceScore</span> (default 90), and derives a multiplier in <span class="inline-code">[0.90, 1.0]</span>. The overall score is then <span class="inline-code">max(50, round(weighted_average * rmf_modifier))</span>. If the record is missing the modifier defaults to <span class="inline-code">1.0</span>.</p>
+
+  <pre><code>def get_rmf_compliance_score():
+    item = table.get_item(
+        Key={'agentId': 'compliance:nist-sp800-37', 'sk': 'INFO'}).get('Item')
+    if item:
+        rmf_score = float(item.get('complianceScore', 90))
+        # 100 -> 1.0, 80 -> ~0.96, 60 -> ~0.92
+        return max(0.90, min(1.0, 0.80 + (rmf_score / 500)))
+    return 1.0</code></pre>
+
+  <h3>Still to harden <span class="badge badge-prod">TODO</span></h3>
+  <p>Tie the modifier to a real AWS security posture instead of a seeded DynamoDB record — e.g. derive it from AWS Security Hub findings (<span class="inline-code">securityhub:GetFindings</span>) or AWS Config rule compliance (<span class="inline-code">config:DescribeComplianceByConfigRule</span>). Both actions would need to be added to the scorer role (not granted today).</p>
+</div>
+
+<h2>6. What the Scorer Writes (DynamoDB shape)</h2>
+
+<div class="card">
+  <p>The <span class="inline-code">rai-scorer</span> writes its results <strong>back onto each agent's INFO row</strong> as an <span class="inline-code">UpdateItem</span> — five <span class="inline-code">0–100</span> integers plus a timestamp. This is the row the <span class="inline-code">data-handler</span> serves on <span class="inline-code">GET /agents</span> and the UI renders:</p>
+
+  <pre><code>table.update_item(
+    Key={'agentId': agent['agentId'], 'sk': 'INFO'},
+    UpdateExpression=('SET score=:s, fairness=:f, transparency=:t, '
+                      'accountability=:a, ethics=:e, raiUpdatedAt=:ts'),
+    ExpressionAttributeValues={
+        ':s': overall, ':f': fairness, ':t': transparency,
+        ':a': accountability, ':e': ethics,
+        ':ts': datetime.utcnow().isoformat() + 'Z',
+    })</code></pre>
+
+  <p>The <span class="inline-code">data-handler</span>'s <span class="inline-code">_AGENT_FIELDS</span> allowlist explicitly includes <span class="inline-code">score</span>, <span class="inline-code">fairness</span>, <span class="inline-code">transparency</span>, <span class="inline-code">accountability</span>, and <span class="inline-code">ethics</span> — otherwise these values would be written to the table but filtered out before reaching the UI.</p>
+
+  <div class="card" style="border-color: var(--yellow); margin-top: 1rem;">
+    <strong>Note — two different RAI schemas exist in this repo.</strong> The shipped <span class="inline-code">rai-scorer</span> above writes flat 0–100 integers onto the INFO row. Separately, <span class="inline-code">flowamp_tools.compliance.write_rai_score()</span> defines a distinct append-only <span class="inline-code">RAI#&lt;ts&gt;</span> row shape — <span class="inline-code">{ subScores, overall (a string in [0.0,1.0]), source, createdAt }</span>. <strong>No shipped agent currently calls <span class="inline-code">write_rai_score()</span></strong>; the compliance-scanner writes <span class="inline-code">AUDIT#</span> rows, not RAI rows. The <span class="inline-code">RAI#</span> path is available for a future agent-driven scorer but is not wired into the daily pipeline today. If you adopt it, reconcile the 0–100-integer vs. 0.0–1.0-string mismatch and teach the UI/data-handler to read the <span class="inline-code">RAI#</span> rows.</div>
+</div>
+
+<h2>7. RAI Scorer vs. Compliance Scanner</h2>
+
+<div class="card">
+  <p>These are two different components with different cadences and outputs — don't conflate them:</p>
+  <table>
+    <thead><tr><th></th><th>rai-scorer (Lambda)</th><th>compliance-scanner (agent)</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Kind</strong></td><td>Plain Python 3.12 Lambda</td><td>Strands agent on the AgentCore runtime (Sonnet 4.6)</td></tr>
+      <tr><td><strong>Cadence</strong></td><td>Daily (EventBridge rate: 1 day) + on-demand <span class="inline-code">POST /rai/score</span></td><td>Once per day per agent (rotation by oldest <span class="inline-code">lastAuditedAt</span>)</td></tr>
+      <tr><td><strong>Output</strong></td><td>Flat F/T/A/E + overall on the INFO row</td><td><span class="inline-code">AUDIT#&lt;ts&gt;</span> rows: per-framework A–F grade, narrative, recommendations</td></tr>
+      <tr><td><strong>Writes RAI scores?</strong></td><td>Yes — this is the scorer</td><td><strong>No</strong> — its system prompt explicitly states "You are a daily auditor, NOT a continuous scorer."</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>8. CDK Wiring (as deployed)</h2>
+
+<div class="card">
+  <p>From <span class="inline-code">cdk/lib/team-stack.ts</span> — the scorer, its schedule, its on-demand route, and the exact IAM it holds today:</p>
+
+  <pre><code>// ─── RAI Scorer (daily) ───
+const raiScorerFn = new lambda.Function(this, "RaiScorerFn", {
+  runtime: lambda.Runtime.PYTHON_3_12,
+  handler: "index.handler",
+  code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "rai-scorer")),
+  environment: { AGENT_TABLE_NAME: agentTable.tableName },
+  timeout: cdk.Duration.seconds(120),
+});
+agentTable.grantReadWriteData(raiScorerFn);
+raiScorerFn.addToRolePolicy(new iam.PolicyStatement({
+  actions: ["cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics"],
+  resources: ["*"],
+}));
+raiScorerFn.addToRolePolicy(new iam.PolicyStatement({
+  actions: ["cloudtrail:LookupEvents"],
+  resources: ["*"],
+}));
+
+// Daily schedule (a rate, not a fixed cron hour)
+new events.Rule(this, "RaiScorerSchedule", {
+  schedule: events.Schedule.rate(cdk.Duration.days(1)),
+}).addTarget(new targets.LambdaFunction(raiScorerFn));
+
+// On-demand re-score from the UI: POST /rai/score → same Lambda
+raiApi.addResource("rai").addResource("score")
+  .addMethod("POST", new apigateway.LambdaIntegration(raiScorerFn),
+             authedMethodOptions);</code></pre>
+
+  <h3>IAM the scorer would need for the hardening TODOs</h3>
+  <p>The role today holds only DynamoDB read/write, <span class="inline-code">cloudwatch:GetMetricStatistics</span>/<span class="inline-code">ListMetrics</span>, and <span class="inline-code">cloudtrail:LookupEvents</span>. To implement the configuration-based checks in §1–5 you would add:</p>
+  <pre><code>raiScorerFn.addToRolePolicy(new iam.PolicyStatement({
+  actions: [
+    'bedrock:GetAgent',
+    'bedrock:GetGuardrail',
+    'bedrock:GetModelInvocationLoggingConfiguration',
+    'lambda:GetFunctionConfiguration',
+    'cloudwatch:DescribeAlarms',
+    'logs:DescribeLogGroups',
+    // if the RMF modifier moves to real posture:
+    'securityhub:GetFindings',
+    'config:DescribeComplianceByConfigRule',
+  ],
+  resources: ['*'],
+}));</code></pre>
+</div>
+
+<h2>9. How the UI Renders RAI</h2>
+
+<div class="card">
+  <p>The Responsible AI Scores panel lives in <span class="inline-code">assetsSrc/site/agent-management.html</span>:</p>
+  <ul>
+    <li><strong><span class="inline-code">renderAIScores(data)</span></strong> draws the fleet: an average/at-risk summary, a score-distribution histogram, and per-agent rows. Each row shows four thin bars labeled <span class="inline-code">F</span>, <span class="inline-code">T</span>, <span class="inline-code">A</span>, <span class="inline-code">E</span> (from <span class="inline-code">a.fairness / a.transparency / a.accountability / a.ethics</span>) and the overall <span class="inline-code">a.score</span>. Rows are color-banded (≥95 green, ≥92 blue, else amber) and split into Top Performers / Needs Attention.</li>
+    <li>The agent-detail view draws the same four dimensions as labeled bars — Fairness (blue), Transparency (purple), Accountability (orange), Ethics (green).</li>
+    <li><strong><span class="inline-code">rescoreRai()</span></strong> backs the "⟳ Re-score now" button. It calls <span class="inline-code">POST /rai/score</span>, then <span class="inline-code">fetchLiveData()</span> and re-renders, toasting <span class="inline-code">"Re-scored N agents"</span> from the Lambda's <span class="inline-code">{updated, total}</span> result.</li>
+    <li><strong><span class="inline-code">fetchLiveData()</span></strong> merges live <span class="inline-code">GET /agents</span> rows into the seeded <span class="inline-code">aiScoresData</span> by name, and only overwrites F/T/A/E when the backend returns a truthy <span class="inline-code">score</span> — so a freshly discovered agent with 0/absent metrics does not blank the seeded view.</li>
+  </ul>
+</div>
+
+<h2>10. Summary: Real Now vs. Still-to-Harden</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Pillar</th>
+      <th>Real signal today</th>
+      <th>Base value in a fresh account</th>
+      <th>Still to harden</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Fairness</strong></td>
+      <td>CW <span class="inline-code">AWS/Bedrock GuardrailInterventions</span> + DDB error rate</td>
+      <td>95</td>
+      <td>Attach guardrails; verify metric dimension; log sampling + feedback</td>
+    </tr>
+    <tr>
+      <td><strong>Transparency</strong></td>
+      <td>CloudTrail <span class="inline-code">LookupEvents</span> by ResourceName</td>
+      <td>80</td>
+      <td>Per-event-type check; invocation-logging check; trace visibility</td>
+    </tr>
+    <tr>
+      <td><strong>Accountability</strong></td>
+      <td>DDB error rate + <span class="inline-code">AWS/Lambda Errors</span> (shared fn) monitoring flag</td>
+      <td>95 (97 with monitoring bonus)</td>
+      <td>Per-agent fn metrics; DLQ + alarm + owner + staleness checks</td>
+    </tr>
+    <tr>
+      <td><strong>Ethics</strong></td>
+      <td>CW <span class="inline-code">GuardrailBlocked</span> + <span class="inline-code">GuardrailPiiRedacted</span></td>
+      <td>96</td>
+      <td>Guardrail-attached/policy config checks; fix trivially-true PII flag</td>
+    </tr>
+    <tr>
+      <td><strong>System (NIST RMF)</strong></td>
+      <td>DDB <span class="inline-code">compliance:nist-sp800-37</span> record → 0.90–1.0 modifier</td>
+      <td>1.0 (if record absent) / ~0.98 at seed 90</td>
+      <td>Tie to Security Hub or AWS Config compliance</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="card" style="border-color: var(--accent); margin-top: 2rem;">
+  <strong>💡 Key insight:</strong> The high base values are a design smell, not a bug — a fresh, un-exercised agent scores ~90+ simply because none of the penalty signals have fired yet. Production hardening should shift the scorer from "penalize observed bad behavior" toward "reward verified good <em>configuration</em>" (guardrail attached? invocation logging on? DLQ + alarm present? owner assigned?). A well-configured agent with no incidents should out-score a poorly-configured one that just hasn't been caught yet.
+</div>
+
+<div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;">
+  <p>FlowAMP AI Agent Governance · RAI Scoring Developer Guide · Reflects the current implementation.</p>
+  <p>Sources: <span class="inline-code">assetsSrc/lambda/rai-scorer/index.py</span>, <span class="inline-code">cdk/lib/team-stack.ts</span>, <span class="inline-code">assetsSrc/lambda/data-handler/index.py</span>, <span class="inline-code">assetsSrc/site/agent-management.html</span>, <span class="inline-code">assetsSrc/agents/_shared/flowamp_tools/compliance.py</span>, <span class="inline-code">assetsSrc/agents/compliance-scanner/main.py</span>.</p>
+</div>
+
+</body>
+</html>

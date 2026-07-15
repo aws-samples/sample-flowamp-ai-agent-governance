@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compliance Auditing — FlowAMP Developer Guide</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --orange: #fb923c; --code-bg: #0d1117; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: #fff; }
+  p, li { color: var(--text); margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  .signal-box { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); white-space: pre-wrap; overflow-x: auto; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; overflow-x: auto; }
+  code { font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); }
+  .ic { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--accent); font-family: 'SF Mono', Consolas, monospace; }
+  ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { padding: 0.75rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--card); color: var(--accent); }
+  td { background: var(--bg); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .badge-demo { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .badge-prod { background: rgba(74,222,128,0.15); color: var(--green); }
+  .status-compliant { color: var(--green); }
+  .status-warning { color: var(--yellow); }
+  .status-critical { color: var(--red); }
+  .pillar-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .pillar-icon { font-size: 1.5rem; }
+  .weight { color: var(--muted); font-size: 0.85rem; }
+  .framework-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 1rem 0; }
+  .fw-card { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; }
+  .fw-card strong { color: #fff; font-size: 0.9rem; }
+  .fw-card .fw-controls { color: var(--muted); font-size: 0.8rem; margin-top: 0.25rem; }
+</style>
+</head>
+<body>
+
+<h1>🏛️ Compliance Auditing — FlowAMP Developer Guide</h1>
+<p class="subtitle">FlowAMP AI Agent Governance · How the compliance-scanner produces real A–F audit grades</p>
+
+<div class="card">
+  <strong>Context:</strong> FlowAMP grades every governed agent against compliance frameworks using the <strong>compliance-scanner</strong> — an AgentCore Runtime (a Strands agent on <span class="ic">us.anthropic.claude-sonnet-4-6</span>) that combines a deterministic checks library with LLM judgement. This is <strong>real and wired end-to-end</strong>: on a daily schedule and on demand, the scanner runs ~23 deterministic checks across five frameworks, authors a narrative + recommendations, and writes an <span class="ic">AUDIT#&lt;ts&gt;</span> row (plus a projected <span class="ic">lastAuditedAt</span>) that the UI reads back as an A–F grade. This guide documents the current implementation and flags the parts that are still stubbed for production hardening.
+</div>
+
+<div class="card" style="border-color: var(--green);">
+  <strong>✅ Real now vs. 🟡 still-to-harden.</strong> Badges throughout this doc mark what is live: <span class="badge badge-prod">REAL</span> the compliance-scanner runtime, the deterministic checks, the audit row shapes, the triggers, the read APIs, and the Compliance UI. <span class="badge badge-demo">STUB</span> a handful of dependencies are safe no-ops in this single-table deployment: work-item lifecycle tools, Athena/curated-warehouse trend checks, and the escalation/AOP runtime. Compliance frameworks are <em>code-defined</em> — runtime editing is not supported.
+</div>
+
+<h2>Architecture Overview</h2>
+
+<div class="card">
+<pre><code>EventBridge (daily 04:00 UTC)      UI "Run audit" / "Run rotation audit"
+        │                                      │
+        │  {"source":"aws.events"}    POST /compliance/scan {"agentId"?}
+        ▼                                      ▼
+┌──────────────────────────────────────────────────────┐
+│  compliance-scan-invoker  (Lambda, fire-and-forget)    │
+│  • API path returns HTTP 202 immediately               │
+│  • async self-invoke (InvocationType='Event')          │
+│    does the long InvokeAgentRuntime call (minutes)     │
+└──────────────────────────┬─────────────────────────────┘
+                           │  bedrock-agentcore:InvokeAgentRuntime
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│  compliance-scanner  (AgentCore Runtime, Strands)      │
+│  model: us.anthropic.claude-sonnet-4-6                  │
+│                                                        │
+│   1. get_agent + list_applicable_frameworks            │
+│   2. read_past_audits + read_past_overrides            │
+│   3. run_check(...)  ── flowamp_compliance_checks ─────┼──▶ Bedrock guardrails, IAM,
+│   4. author narrative + recommendations + escalations  │    CloudWatch, Config, S3, AgentTable
+│   5. finalize_audit(...)  ── single atomic commit ─────┤
+└──────────────────────────┬─────────────────────────────┘
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│  DynamoDB AgentTable  (single table, PK agentId, SK sk)│
+│   AUDIT#<ts>  compliance audit report (rowType=AUDIT)  │
+│   RAI#<ts>    responsible-AI score row                 │
+│   EVENT#<ts>#<id>  compliance_audit event              │
+│   INFO row    lastAuditedAt projected (best-effort)    │
+└──────────────────────────┬─────────────────────────────┘
+                           ▼
+   GET /agents/{agentId}/audit   (one agent, newest-first)
+   GET /audits                   (fleet: latest AUDIT# per agent)
+                           ▼
+   Compliance view + per-agent Compliance Audit panel (agent-management.html)</code></pre>
+</div>
+
+<h2>Data Model</h2>
+
+<p>FlowAMP uses a <strong>single DynamoDB table</strong> (<span class="ic">AgentTable</span>, partition key <span class="ic">agentId</span>, sort key <span class="ic">sk</span>). Row types are separated by <span class="ic">sk</span> prefix. The compliance-scanner writes these:</p>
+
+<table>
+  <tr><th>Row (<span class="ic">sk</span>)</th><th>Written by</th><th>Meaning</th></tr>
+  <tr><td><span class="ic">AUDIT#&lt;ts&gt;</span></td><td><span class="ic">finalize_audit</span> → <span class="ic">write_audit_report</span></td><td>One compliance audit report per run (<span class="ic">rowType="AUDIT"</span>).</td></tr>
+  <tr><td><span class="ic">RAI#&lt;ts&gt;</span></td><td><span class="ic">write_rai_score</span></td><td>Responsible-AI sub-scores + composite in [0.0, 1.0].</td></tr>
+  <tr><td><span class="ic">EVENT#&lt;ts&gt;#&lt;id&gt;</span></td><td><span class="ic">log_compliance_event</span></td><td><span class="ic">compliance_audit</span> event with a 90-day TTL; surfaces in the Event Explorer.</td></tr>
+  <tr><td><span class="ic">COMPLIANCE#&lt;frameworkId&gt;</span></td><td>seed / operators</td><td>Per-agent framework <em>assignment</em> (opt-in beyond the baseline).</td></tr>
+  <tr><td><span class="ic">INFO</span> (projection)</td><td><span class="ic">_update_agent_last_audited</span></td><td>Conditional <span class="ic">SET lastAuditedAt</span> on the agent's INFO row — never overwrites a newer timestamp.</td></tr>
+</table>
+
+<h3>The <span class="ic">AUDIT#</span> report shape <span class="badge badge-prod">REAL</span></h3>
+
+<p>Every audit row carries a <span class="ic">report</span> object with exactly these keys (validated in <span class="ic">write_audit_report</span>). Floats are coerced to <span class="ic">Decimal</span> at the DynamoDB boundary:</p>
+
+<pre><code>{
+  "agentId":  "grid-load-forecaster",     // partition key
+  "sk":       "AUDIT#2026-07-06T04:00:12Z",// sort key (ISO ts → lexical newest-first)
+  "rowType":  "AUDIT",
+  "createdAt":"2026-07-06T04:00:12Z",
+  "report": {
+    "byFramework": {                       // one entry per applicable framework
+      "FLOWAMP_BASELINE": {
+        "score": 0.78,                     // float in [0.0, 1.0]
+        "grade": "B",                      // computed from the rubric (see below)
+        "criticalFailures": 1,
+        "highFailures": 2,
+        "checks": [
+          {"checkId": "owner-populated",   "result": "pass", "severity": "high"},
+          {"checkId": "guardrail-attached","result": "fail", "severity": "high"}
+          // ... one entry per check the framework requires
+        ]
+      },
+      "nist-ai-rmf": { "score": 0.82, "grade": "B", "criticalFailures": 0, ... }
+    },
+    "compositeGrade":  "B",                // mean of per-framework scores → baseline rubric
+    "compositeScore":  0.80,               // float in [0.0, 1.0]
+    "narrative":       "...",              // ≤ 4000 chars, cites checkIds + overrides
+    "recommendations": [                   // {checkId, severity, recommendation, frameworks[]}
+      {"checkId": "guardrail-attached", "severity": "high",
+       "recommendation": "Attach a Bedrock guardrail to the agent's model invocations.",
+       "frameworks": ["FLOWAMP_BASELINE", "nist-ai-rmf"]}
+    ],
+    "escalatedWorkItems": []               // work-item ids (no-op in this deployment)
+  }
+}</code></pre>
+
+<h3>RAI score row <span class="badge badge-prod">REAL</span></h3>
+<pre><code>{
+  "agentId":   "grid-load-forecaster",
+  "sk":        "RAI#2026-07-06T06:00:00Z",
+  "subScores": {"fairness": 0.9, "transparency": 0.8, ...},  // each in [0.0, 1.0]
+  "overall":   "0.85",                                       // stored as string
+  "source":    "rai-scorer",
+  "createdAt": "2026-07-06T06:00:00Z"
+}</code></pre>
+
+<h3>Letter grades</h3>
+<p>Grades come from the framework's <span class="ic">auditorConfig.gradingRubric</span> (all five frameworks ship the same rubric). <span class="ic">_score_to_grade</span> walks thresholds high→low; below the lowest returns <span class="ic">F</span>:</p>
+<p><span class="status-compliant">A+ ≥ 0.95 · A ≥ 0.85 · B ≥ 0.75</span> · <span class="status-warning">C ≥ 0.65 · D ≥ 0.50</span> · <span class="status-critical">F &lt; 0.50</span></p>
+
+<h2>Triggers</h2>
+
+<div class="card">
+  <h3>Why a fire-and-forget invoker? <span class="badge badge-prod">REAL</span></h3>
+  <p>The compliance-scanner is an AgentCore Runtime (invoke-only, no API of its own) and — being an LLM auditor running deterministic checks per agent — takes <em>minutes</em>. API Gateway's hard integration timeout is 29 s, so it cannot be invoked synchronously behind the API. The <span class="ic">compliance-scan-invoker</span> Lambda bridges the gap:</p>
+  <ul>
+    <li><strong>API path</strong> (<span class="ic">POST /compliance/scan</span>): reads an optional <span class="ic">{"agentId": "..."}</span> body, async re-invokes <em>itself</em> with <span class="ic">InvocationType='Event'</span>, and returns <span class="ic">HTTP 202 {"status":"started"}</span> immediately.</li>
+    <li><strong>Async worker</strong> (<span class="ic">{"async_audit": true, "agentId": ...}</span>): performs the long <span class="ic">invoke_agent_runtime</span> call and drains the response so the runtime finishes.</li>
+    <li><strong>EventBridge schedule</strong> (daily): arrives as <span class="ic">{"source": "aws.events"}</span> → treated as a rotation run, same async path.</li>
+  </ul>
+
+  <h3>Daily rotation (EventBridge, 04:00 UTC) <span class="badge badge-prod">REAL</span></h3>
+  <p>The <span class="ic">ComplianceAuditSchedule</span> rule fires once a day and audits <strong>one agent per run</strong> — the eligible agent with the oldest <span class="ic">lastAuditedAt</span> on an auditable platform. Selection (<span class="ic">_pick_rotation_target</span>) sorts eligible agents ascending by <span class="ic">lastAuditedAt</span>, treating absent/null as <span class="ic">""</span> so never-audited agents win first. <span class="ic">_eligible_for_audit</span> skips <span class="ic">FLOWAMP_</span> sentinel rows and <span class="ic">decommissioned</span>/<span class="ic">rejected</span> agents. The cursor is pre-stamped <em>before</em> the LLM loop runs, so a flaky audit can never park the rotation on the same agent forever (ADR-22).</p>
+
+  <h3>On-demand <span class="badge badge-prod">REAL</span></h3>
+  <p><span class="ic">POST /compliance/scan {"agentId": "..."}</span> audits one specific agent; <span class="ic">POST /compliance/scan {}</span> triggers a rotation pick. The UI's per-agent "Run audit" / "Re-audit" buttons send the agent id; the "Run rotation audit" button sends <span class="ic">{}</span>.</p>
+
+<pre><code>// cdk/lib/team-stack.ts — daily rotation schedule
+new events.Rule(this, "ComplianceAuditSchedule", {
+  schedule: events.Schedule.cron({ minute: "0", hour: "4" }),   // 04:00 UTC
+  description: "Daily compliance audit — one agent per run (oldest lastAuditedAt first)",
+}).addTarget(new targets.LambdaFunction(complianceScanInvokerFn));
+
+// POST /compliance/scan → compliance-scan-invoker (fire-and-forget)
+complianceResource
+  .addResource("scan")
+  .addMethod("POST", new apigateway.LambdaIntegration(complianceScanInvokerFn));</code></pre>
+</div>
+
+<h2>The Deterministic Checks Framework</h2>
+
+<div class="card">
+  <p><span class="ic">flowamp_compliance_checks</span> is a shared library used by both the compliance-scanner (via the <span class="ic">run_check</span> tool) and the RAI Scorer. Each check is a <span class="ic">Check</span> subclass registered at import time; the auditor calls <span class="ic">run_check(checkId, target, params)</span> and results are cached per run so duplicate checks across frameworks cost nothing. Convenience base classes handle common shapes: <span class="ic">AthenaCheck</span> (trend queries), <span class="ic">AwsConfigCheck</span> (Config compliance), <span class="ic">IamPolicyCheck</span> (role policy inspection). A <span class="ic">CheckResult</span> is <span class="ic">{result: pass|fail|skip, evidence, duration_ms, requiresWorkItem}</span>.</p>
+
+  <p>The ~23 built-in checks span five categories. AccessDenied and unavailable dependencies return <span class="ic">skip</span> (not <span class="ic">fail</span>), so missing IAM or absent Athena degrades gracefully rather than tanking a grade:</p>
+
+  <table>
+    <tr><th>Category</th><th>Checks (<span class="ic">checkId</span> · default severity · cost)</th></tr>
+    <tr><td><strong>fairness</strong></td><td><span class="ic">guardrail-attached</span> (high) · <span class="ic">guardrail-content-policy</span> (high) · <span class="ic">guardrail-intervention-rate</span> (high, moderate) · <span class="ic">invocation-log-pii-sample</span> (high, expensive) · <span class="ic">user-feedback-rate</span> (medium, moderate)</td></tr>
+    <tr><td><strong>transparency</strong></td><td><span class="ic">bedrock-invocation-logging</span> (high) · <span class="ic">agent-log-group-exists</span> (medium) · <span class="ic">cloudtrail-bedrock-coverage</span> (medium, moderate) · <span class="ic">aop-coverage</span> (medium) · <span class="ic">agent-trace-enabled</span> (medium) · <span class="ic">decisions-logged</span> (medium)</td></tr>
+    <tr><td><strong>accountability</strong></td><td><span class="ic">owner-populated</span> (high) · <span class="ic">escalation-group-assigned</span> (high) · <span class="ic">dlq-configured</span> (medium) · <span class="ic">lambda-error-rate</span> (high, moderate) · <span class="ic">agent-staleness</span> (medium) · <span class="ic">cw-alarms-cover-agent</span> (medium) · <span class="ic">tagging-compliance</span> (low)</td></tr>
+    <tr><td><strong>ethics</strong></td><td><span class="ic">guardrail-sensitive-info-policy</span> (high) · <span class="ic">guardrail-topic-policy</span> (medium) · <span class="ic">model-on-approved-list</span> (high)</td></tr>
+    <tr><td><strong>operational</strong></td><td><span class="ic">vpc-isolated</span> (high) · <span class="ic">data-residency-region</span> (critical) · <span class="ic">audit-frequency</span> (medium) · <span class="ic">appconfig-model-selection</span> (low)</td></tr>
+  </table>
+
+  <p><span class="badge badge-demo">DATA GAP</span> This deployment has <strong>no historical Athena / curated warehouse</strong>. The moderate/expensive trend checks (<span class="ic">guardrail-intervention-rate</span>, <span class="ic">invocation-log-pii-sample</span>, <span class="ic">cloudtrail-bedrock-coverage</span>, <span class="ic">lambda-error-rate</span>, <span class="ic">user-feedback-rate</span>) and the <span class="ic">query_athena</span> tool return no rows with an explanatory note. The system prompt instructs the auditor <em>not</em> to treat an empty Athena result as a finding — audits are grounded in the cheap checks, <span class="ic">read_past_audits</span>, and <span class="ic">read_past_overrides</span>. Hardening = stand up the invocation-log warehouse and wire the trend queries.</p>
+</div>
+
+<h2>Compliance Frameworks (code-defined)</h2>
+
+<div class="card">
+  <p>FlowAMP ships <strong>five</strong> frameworks in <span class="ic">flowamp_compliance_checks/frameworks</span>. Each framework is a code dict declaring a <span class="ic">raiConfig</span> (per-dimension checks + weights, used by the RAI Scorer), an <span class="ic">auditorConfig</span> (extra auditor-only checks + grading rubric + prompt guidance), and <span class="ic">escalations</span> rules. <span class="ic">list_applicable_frameworks(agentId)</span> <strong>always includes <span class="ic">FLOWAMP_BASELINE</span></strong>, then layers any per-agent <span class="ic">COMPLIANCE#</span> assignment rows on top.</p>
+
+  <div class="framework-grid">
+    <div class="fw-card">
+      <strong>FLOWAMP_BASELINE</strong> — FlowAMP Baseline
+      <div class="fw-controls">Organisational baseline applied to <em>every</em> agent. References the cheap-tier checks across all four RAI dimensions + auditor checks (tagging, audit-frequency, appconfig-model-selection). Owns the composite grading rubric.</div>
+    </div>
+    <div class="fw-card">
+      <strong>nist-ai-rmf</strong> — NIST AI RMF
+      <div class="fw-controls">GOVERN / MAP / MEASURE / MANAGE alignment. Guardrail + logging + ownership + escalation checks; auditor adds <span class="ic">audit-frequency</span>.</div>
+    </div>
+    <div class="fw-card">
+      <strong>iso-27001</strong> — ISO/IEC 27001
+      <div class="fw-controls">Information-security management for AI agents. Adds <span class="ic">guardrail-sensitive-info-policy</span>; auditor adds <span class="ic">vpc-isolated</span> + <span class="ic">tagging-compliance</span>.</div>
+    </div>
+    <div class="fw-card">
+      <strong>soc-2</strong> — SOC 2
+      <div class="fw-controls">Trust Service Criteria (Security, Availability, Confidentiality). DLQ + alarms + logging + sensitive-info checks; auditor adds <span class="ic">audit-frequency</span> + <span class="ic">tagging-compliance</span>.</div>
+    </div>
+    <div class="fw-card">
+      <strong>nerc-cip</strong> — NERC CIP
+      <div class="fw-controls">Critical Infrastructure Protection for grid-operations agents. Guardrail + logging + alarms + approved-model checks; auditor adds <span class="ic">vpc-isolated</span> + <span class="ic">data-residency-region</span> (critical) + <span class="ic">audit-frequency</span>.</div>
+    </div>
+  </div>
+
+  <p><span class="badge badge-demo">STUB</span> Frameworks are <strong>code-defined</strong> — there is no <span class="ic">ComplianceFrameworkTable</span> and <strong>runtime editing of frameworks is not supported</strong>. To add or change a framework you edit the templates in <span class="ic">flowamp_compliance_checks/frameworks/</span> and redeploy. Per-agent framework <em>assignment</em> (which frameworks apply to a given agent) is data-driven via <span class="ic">COMPLIANCE#</span> rows.</p>
+
+  <pre><code># flowamp_compliance_checks/frameworks/baseline.py — excerpt
+BASELINE_TEMPLATE = {
+  "frameworkId": "FLOWAMP_BASELINE",
+  "name": "FlowAMP Baseline",
+  "raiConfig": {
+    "perDimension": {
+      "fairness":       {"checks": ["guardrail-attached", "guardrail-content-policy"], "dimensionWeight": 0.25},
+      "transparency":   {"checks": ["bedrock-invocation-logging", "agent-log-group-exists",
+                                    "decisions-logged", "aop-coverage"],               "dimensionWeight": 0.25},
+      "accountability": {"checks": ["owner-populated", "escalation-group-assigned",
+                                    "dlq-configured", "cw-alarms-cover-agent",
+                                    "tagging-compliance"],                             "dimensionWeight": 0.25},
+      "ethics":         {"checks": ["guardrail-sensitive-info-policy", "guardrail-topic-policy",
+                                    "model-on-approved-list"],                         "dimensionWeight": 0.25},
+    },
+    "compositeFormula": "weighted-mean",
+  },
+  "auditorConfig": {
+    "checks": ["tagging-compliance", "audit-frequency", "appconfig-model-selection"],
+    "gradingRubric": {"A+": 0.95, "A": 0.85, "B": 0.75, "C": 0.65, "D": 0.50},
+  },
+  "escalations": [{"group": "compliance-team", "criteria": "any critical check fails"}],
+}</code></pre>
+</div>
+
+<h2>How the Scanner Runs an Audit</h2>
+
+<div class="card">
+  <p>The scanner (<span class="ic">compliance-scanner/main.py</span>) is a Strands <span class="ic">Agent</span> exposed through <span class="ic">BedrockAgentCoreApp</span>. The <span class="ic">invoke(payload)</span> entrypoint accepts two shapes:</p>
+  <ul>
+    <li><strong>On-demand</strong>: <span class="ic">agentId</span> in the payload top-level → audit that agent.</li>
+    <li><strong>Rotation</strong>: no <span class="ic">agentId</span> → <span class="ic">_pick_rotation_target()</span> selects the oldest-audited eligible agent. (A work-item-driven dispatch shape is also accepted but its lifecycle tools are no-ops here — there is no AOP/WorkItem runtime in this repo.)</li>
+  </ul>
+  <p>In both paths <span class="ic">lastAuditedAt</span> is pre-stamped, then the Strands loop runs under the system prompt with these tools:</p>
+
+  <table>
+    <tr><th>Tool</th><th>Kind</th><th>Purpose</th></tr>
+    <tr><td><span class="ic">get_agent</span></td><td>read</td><td>INFO record + <span class="ic">COMPLIANCE#</span> assignments.</td></tr>
+    <tr><td><span class="ic">list_applicable_frameworks</span></td><td>read</td><td>Resolved framework dicts (always includes baseline).</td></tr>
+    <tr><td><span class="ic">run_check</span></td><td>read</td><td>Execute a deterministic check (cached per run).</td></tr>
+    <tr><td><span class="ic">read_past_audits</span> / <span class="ic">read_past_overrides</span></td><td>read</td><td>History for pattern-aware judgement (don't re-flag resolved overrides).</td></tr>
+    <tr><td><span class="ic">list_agent_data_access</span> / <span class="ic">list_agent_tool_access</span></td><td>read</td><td>Access-matrix grants + sensitivity metadata for sensitivity-vs-label reasoning.</td></tr>
+    <tr><td><span class="ic">query_athena</span></td><td>read</td><td>Trend queries — <span class="badge badge-demo">STUB</span> returns no rows in this deployment.</td></tr>
+    <tr><td><span class="ic">add_audit_note</span></td><td>write</td><td>Drop a <span class="ic">NOTE#</span> row during the reasoning loop.</td></tr>
+    <tr><td><span class="ic">create_work_item</span></td><td>write</td><td>Escalation work item — <span class="badge badge-demo">STUB</span> no-op (no WorkItem runtime).</td></tr>
+    <tr><td><span class="ic">finalize_audit</span></td><td>write</td><td>The <strong>single atomic commit</strong> — writes the AUDIT# row, event, and escalations.</td></tr>
+  </table>
+
+  <p>The system prompt constrains the auditor tightly: it <em>may not</em> write to the AgentTable directly, invoke other runtimes directly, or use raw boto3 — every mutation flows through <span class="ic">finalize_audit</span>, <span class="ic">add_audit_note</span>, or <span class="ic">create_work_item</span>. It reasons about sensitivity mismatches (e.g. an agent holding <span class="ic">restricted</span> data but declaring <span class="ic">public</span> output) and surfaces them in the narrative rather than auto-escalating.</p>
+
+  <pre><code># compliance-scanner/main.py — the atomic commit tool signature
+finalize_audit(
+    agentId,
+    byFramework,      # {frameworkId: {score, criticalFailures, highFailures, checks[]}}
+    narrative,        # ≤ 4000 chars
+    recommendations,  # [{checkId, severity, recommendation, frameworks[]}]
+    escalations,      # [{group, criteria, title, priority, payload}]
+)
+# finalize_audit then: validates inputs → computes per-framework + composite grades
+# against the baseline rubric → write_audit_report(AUDIT#<ts>) → log_compliance_event
+# → create work items (no-op) → patch escalatedWorkItems → returns {auditSk, ...}.</code></pre>
+</div>
+
+<h2>Read Paths &amp; the Compliance UI</h2>
+
+<div class="card">
+  <h3>Data-handler read APIs <span class="badge badge-prod">REAL</span></h3>
+  <ul>
+    <li><span class="ic">GET /agents/{agentId}/audit?limit=N</span> → <span class="ic">get_agent_audits</span>: a single-partition Query on <span class="ic">AUDIT#</span> with <span class="ic">ScanIndexForward=False</span> (newest-first). Cheap, no scan.</li>
+    <li><span class="ic">GET /audits</span> → <span class="ic">get_all_latest_audits</span>: one scan for <span class="ic">AUDIT#</span> rows, reduced to the newest row per <span class="ic">agentId</span> (the lexical <span class="ic">sk</span> max). Backs the fleet Compliance view.</li>
+  </ul>
+  <p>Both responses are projected to <span class="ic">_AUDIT_FIELDS = {'agentId', 'sk', 'rowType', 'createdAt', 'report'}</span> — anything not in that set (including internal keys) is dropped before it reaches the browser.</p>
+
+  <h3>UI surfaces <span class="badge badge-prod">REAL</span></h3>
+  <p>In <span class="ic">agent-management.html</span> the compliance data drives two views:</p>
+  <ul>
+    <li><strong>Dedicated "Compliance" sidebar view</strong> (<span class="ic">loadComplianceFleet</span> / <span class="ic">renderComplianceFleet</span>): a fleet table with the composite A–F grade, composite score /100, per-framework badges, the top critical/high failed checks, and the last-audited date. A summary strip shows the grade distribution (graded / passing A–B / marginal C / failing D–F). "Run rotation audit" (<span class="ic">runFleetAudit</span> → <span class="ic">POST /compliance/scan {}</span>) and per-row "Re-audit" (<span class="ic">runComplianceAudit</span> → <span class="ic">POST /compliance/scan {agentId}</span>) trigger scans and poll the view until the new grade lands. Auto-refreshes every 60 s.</li>
+    <li><strong>Per-agent Compliance Audit panel</strong> in the agent detail Overview tab (<span class="ic">loadAgentAudit</span> → <span class="ic">GET /agents/{id}/audit?limit=1</span>): shows the agent's newest composite grade, per-framework grades, and a "Run audit" button. After triggering, it polls <span class="ic">loadAgentAudit</span> a few times so the panel updates once the scanner's new AUDIT# row lands (~1–2 min).</li>
+  </ul>
+</div>
+
+<h2>CDK Wiring</h2>
+
+<div class="card">
+  <p>All of the following are in <span class="ic">cdk/lib/team-stack.ts</span> and deploy <strong>always</strong> — the compliance-scanner is core platform functionality, not a flag-gated sample.</p>
+
+  <h3>compliance-scanner AgentCore Runtime</h3>
+  <pre><code>// Bundle vendors flowamp_tools + flowamp_compliance_checks + arm64 deps (no Docker).
+const complianceScannerBundle = assembleAgentBundle({
+  agentDir: path.join(assetsSrc, "agents", "compliance-scanner"),
+  sharedPackages: ["flowamp_tools", "flowamp_compliance_checks"],
+  bundleName: "compliance-scanner",
+});
+const complianceScanner = new agentcore.Runtime(this, "ComplianceScannerRuntime", {
+  runtimeName: "flowampComplianceScanner",
+  code: agentcore.RuntimeCode.fromAsset({ path: complianceScannerBundle }),
+  environment: { FLOWAMP_AGENT_ID: "flowamp_compliance_scanner", /* AGENT_TABLE_NAME, ... */ },
+  description: "FlowAMP compliance scanner — deterministic checks + RAI grading",
+});
+agentTable.grantReadWriteData(complianceScanner);
+complianceScanner.addToRolePolicy(modelInvokeStatement);        // Bedrock InvokeModel
+complianceScanner.addToRolePolicy(/* read-only signals: config:GetComplianceDetailsByResource, etc. */);</code></pre>
+
+  <h3>compliance-scan-invoker Lambda + schedule + route</h3>
+  <pre><code>const complianceScanInvokerFn = new lambda.Function(this, "ComplianceScanInvokerFn", {
+  functionName: complianceInvokerName,
+  code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "compliance-scan-invoker")),
+  environment: { COMPLIANCE_SCANNER_ARN: complianceScanner.agentRuntimeArn },
+});
+// InvokeAgentRuntime on the scanner + self-invoke (Event) permission.
+complianceScanInvokerFn.addToRolePolicy(/* bedrock-agentcore:InvokeAgentRuntime */);
+complianceScanInvokerFn.addToRolePolicy(/* lambda:InvokeFunction on itself */);
+
+// Daily rotation
+new events.Rule(this, "ComplianceAuditSchedule", {
+  schedule: events.Schedule.cron({ minute: "0", hour: "4" }),   // 04:00 UTC
+}).addTarget(new targets.LambdaFunction(complianceScanInvokerFn));
+
+// API routes: POST /compliance/scan, GET /agents/{agentId}/audit, GET /audits
+new cdk.CfnOutput(this, "ComplianceScannerRuntimeArn", { value: complianceScanner.agentRuntimeArn });</code></pre>
+</div>
+
+<h2>What's Real vs. Still-to-Harden</h2>
+
+<table>
+  <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><strong>compliance-scanner runtime</strong></td><td class="status-compliant">REAL</td><td>AgentCore Runtime, Strands agent on <span class="ic">us.anthropic.claude-sonnet-4-6</span>, deployed always.</td></tr>
+    <tr><td><strong>Deterministic checks (~23)</strong></td><td class="status-compliant">REAL</td><td>Live against Bedrock guardrails, IAM, CloudWatch, Config, S3, AgentTable. AccessDenied/unavailable → <span class="ic">skip</span>.</td></tr>
+    <tr><td><strong>5 frameworks + grading</strong></td><td class="status-compliant">REAL</td><td>baseline, nist-ai-rmf, iso-27001, soc-2, nerc-cip. A–F composite grades from the rubric.</td></tr>
+    <tr><td><strong>Triggers</strong></td><td class="status-compliant">REAL</td><td>Daily 04:00 UTC rotation + on-demand <span class="ic">POST /compliance/scan</span> via fire-and-forget invoker (202 + async self-invoke).</td></tr>
+    <tr><td><strong>Read APIs + UI</strong></td><td class="status-compliant">REAL</td><td><span class="ic">GET /agents/{id}/audit</span>, <span class="ic">GET /audits</span>; Compliance fleet view + per-agent Overview panel.</td></tr>
+    <tr><td><strong>Athena / trend checks</strong></td><td class="status-warning">STUB</td><td>No curated warehouse; <span class="ic">query_athena</span> + moderate/expensive checks return no rows. Harden = stand up the invocation-log warehouse.</td></tr>
+    <tr><td><strong>Work-item / escalation lifecycle</strong></td><td class="status-warning">STUB</td><td><span class="ic">create_work_item</span> + work-item tools are no-ops (no AOP/WorkItem runtime). <span class="ic">escalatedWorkItems</span> stays empty. Harden = wire an escalation backend.</td></tr>
+    <tr><td><strong>Framework runtime editing</strong></td><td class="status-warning">CODE-DEFINED</td><td>Frameworks live in code (<span class="ic">flowamp_compliance_checks/frameworks/</span>). Editing at runtime is not supported; per-agent assignment via <span class="ic">COMPLIANCE#</span> rows is data-driven.</td></tr>
+  </tbody>
+</table>
+
+<div class="card" style="border-color: var(--accent); margin-top: 2rem;">
+  <strong>💡 Key insight:</strong> The compliance-scanner (daily A–F <em>audit</em>) and the RAI Scorer (continuous responsible-AI <em>scoring</em>) are complementary and share the same <span class="ic">flowamp_compliance_checks</span> library. The RAI Scorer writes raw <span class="ic">RAI#</span> rows on its own cadence; the auditor runs once per day per agent, layers judgement + history on top of the checks, and writes an <span class="ic">AUDIT#</span> report with a narrative and per-framework grade. The auditor reads past audits and human overrides so it doesn't re-flag issues an operator already resolved.
+</div>
+
+<div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;">
+  <p>FlowAMP · Compliance Auditing Developer Guide · Reflects the current implementation (compliance-scanner wired end-to-end, real A–F audit grades).</p>
+  <p>Sources: <span class="ic">assetsSrc/agents/compliance-scanner/main.py</span> · <span class="ic">assetsSrc/agents/compliance-scanner/tools.py</span> · <span class="ic">assetsSrc/agents/_shared/flowamp_tools/compliance.py</span> · <span class="ic">assetsSrc/agents/_shared/flowamp_compliance_checks/</span> · <span class="ic">assetsSrc/lambda/compliance-scan-invoker/index.py</span> · <span class="ic">assetsSrc/lambda/data-handler/index.py</span> · <span class="ic">cdk/lib/team-stack.ts</span> · <span class="ic">assetsSrc/site/agent-management.html</span></p>
+</div>
+
+</body>
+</html>

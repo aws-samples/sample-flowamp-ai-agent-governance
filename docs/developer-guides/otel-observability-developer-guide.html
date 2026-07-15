@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenTelemetry / AgentCore Observability — Developer Guide</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --orange: #fb923c; --purple: #b388ff; --code-bg: #0d1117; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+  h2 { font-size: 1.4rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; color: #fff; }
+  p, li { color: var(--text); margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; overflow-x: auto; }
+  code { font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); }
+  .ic { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--accent); font-family: 'SF Mono', Consolas, monospace; }
+  ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+  th, td { padding: 0.6rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--card); color: var(--accent); }
+  td { background: var(--bg); }
+  .badge-real { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: rgba(74,222,128,0.15); color: var(--green); }
+  .badge-note { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: rgba(56,189,248,0.15); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>🔭 OpenTelemetry &amp; AgentCore Observability — Developer Guide</h1>
+<p class="subtitle">FlowAMP · How agent traces get from a Strands agent to aws/spans, and how the pipeline is wired for AgentCore Evaluations</p>
+
+<div class="card">
+  <strong>Overview:</strong> AgentCore <em>Evaluations</em> (the Evaluations page) scores agents by reading
+  their <strong>OpenTelemetry spans</strong>, not their application logs. This guide describes how a Strands
+  agent deployed with <strong>direct-code deployment</strong> emits those spans, the end-to-end data flow to
+  CloudWatch, and how the pipeline is configured.
+</div>
+
+<h2>The pipeline at a glance</h2>
+
+<pre><code>Strands agent (native OTEL instrumentation)
+   │  spans: chat / execute_tool / execute_event_loop_cycle …
+   ▼
+opentelemetry-instrument bootstrap  ── installs global TracerProvider + ADOT exporter
+   │  (activated by AGENT_OBSERVABILITY_ENABLED; see "Enabling instrumentation")
+   ▼
+OpenInference processor  ── rewrites Strands spans into GenAI semantic conventions
+   │
+   ▼
+AgentCore Runtime collector ──► CloudWatch  aws/spans  (Transaction Search index)
+   │
+   ├──► AgentCore Observability (GenAI Observability console)
+   └──► AgentCore Evaluations (online eval config samples a session, LLM-judges it)
+              │
+              ▼
+        /aws/bedrock-agentcore/evaluations/results/&lt;config-id&gt;  +  EMF metrics
+              │
+              ▼
+        FlowAMP data-handler  →  GET /evaluations  →  Evaluations UI</code></pre>
+
+<h2>Components in this repo</h2>
+
+<table>
+  <tr><th>Piece</th><th>Where</th><th>Role</th></tr>
+  <tr><td>OTEL re-exec bootstrap</td><td>top of each <span class="ic">assetsSrc/agents/*/main.py</span></td><td>Launches the agent under OpenTelemetry auto-instrumentation on the direct-code runtime.</td></tr>
+  <tr><td>OpenInference processor</td><td><span class="ic">discovery-scanner/main.py</span> (lazy attach)</td><td>Translates Strands' native spans into GenAI semantic conventions the evaluator reads.</td></tr>
+  <tr><td>Observability env</td><td><span class="ic">team-stack.ts</span> / <span class="ic">sample-agents-stack.ts</span> <span class="ic">observabilityEnv</span></td><td>Sets <span class="ic">AGENT_OBSERVABILITY_ENABLED=true</span> etc. on every runtime.</td></tr>
+  <tr><td>Requirements</td><td>each agent's <span class="ic">requirements.txt</span></td><td><span class="ic">strands-agents</span> (1.x), <span class="ic">aws-opentelemetry-distro</span>, <span class="ic">openinference-instrumentation-strands-agents</span>.</td></tr>
+  <tr><td>Readiness probe</td><td><span class="ic">data-handler/index.py</span> <span class="ic">check_eval_readiness()</span></td><td>Reports whether Transaction Search is on and spans are present.</td></tr>
+</table>
+
+<h2>Enabling instrumentation on the direct-code runtime</h2>
+
+<div class="card">
+  <p>OpenTelemetry auto-instrumentation is activated by launching the agent under the
+  <span class="ic">opentelemetry-instrument</span> command — this reads the OTEL environment variables and
+  installs a global <span class="ic">TracerProvider</span> wired to the runtime's collector. On the
+  <strong>container</strong> deployment path this is set in the Dockerfile:</p>
+  <pre><code>CMD ["opentelemetry-instrument", "python", "main.py"]</code></pre>
+
+  <p>FlowAMP uses <strong>direct-code deployment</strong> (zip → S3, no Docker), where the runtime launches the
+  entrypoint directly as <span class="ic">python main.py</span> and the auto-instrumentation command is not
+  applied. Without it, the global provider remains a <span class="ic">ProxyTracerProvider</span>,
+  <span class="ic">OTEL_EXPORTER_OTLP_ENDPOINT</span> is not configured, and no spans are exported to
+  <span class="ic">aws/spans</span>.</p>
+
+  <p><strong>Activate auto-instrumentation from code.</strong> Each <span class="ic">main.py</span> re-execs
+  itself once, in-process, invoking the auto-instrumentation entry point. Use the importable entry point rather
+  than the <span class="ic">opentelemetry-instrument</span> console script — with <span class="ic">uv pip install
+  --target</span> the script is installed under <span class="ic">&lt;bundle&gt;/bin</span> (not on
+  <span class="ic">PATH</span>), so re-exec the runtime interpreter and call the module directly:</p>
+  <pre><code>import os as _os, sys as _sys
+
+if (_os.environ.get("AGENT_OBSERVABILITY_ENABLED") == "true"
+        and not _os.environ.get("_OTEL_REEXEC")):
+    _os.environ["_OTEL_REEXEC"] = "1"                      # one-shot guard
+    _bundle_dir = _os.path.dirname(_os.path.abspath(__file__))
+    _os.environ["PYTHONPATH"] = (_bundle_dir + _os.pathsep
+        + _os.environ.get("PYTHONPATH", "")).rstrip(_os.pathsep)
+    try:
+        _os.execv(_sys.executable, [
+            _sys.executable, "-c",
+            "from opentelemetry.instrumentation.auto_instrumentation import run; run()",
+            _sys.executable, *_sys.argv,
+        ])
+    except Exception as exc:            # wrapper absent (local dev) → run uninstrumented
+        print(f"otel auto-instrument re-exec skipped: {exc}")</code></pre>
+  <p>MUST be the first thing in the module, before <span class="ic">boto3</span>/<span class="ic">strands</span> import
+  (auto-instrumentation patches libraries at import). The <span class="ic">_OTEL_REEXEC</span> flag makes it a
+  one-shot: the re-exec'd process sees it set, skips the branch, and proceeds to the real imports — now fully
+  instrumented. Guarded so a missing wrapper (e.g. local runs) never crashes the agent.</p>
+</div>
+
+<h2>CDK wiring: the observability env</h2>
+
+<div class="card">
+  <p>The re-exec branch is gated on <span class="ic">AGENT_OBSERVABILITY_ENABLED</span>, which (with the sibling
+  ADOT vars) is set on every runtime in <span class="ic">team-stack.ts</span> and
+  <span class="ic">sample-agents-stack.ts</span>:</p>
+  <pre><code>const observabilityEnv: Record&lt;string, string&gt; = {
+  AGENT_OBSERVABILITY_ENABLED: "true",
+  OTEL_PYTHON_DISTRO: "aws_distro",
+  OTEL_PYTHON_CONFIGURATOR: "aws_configurator",
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+};
+// merged into each runtime:
+environmentVariables: { AGENT_TABLE_NAME: agentTable.tableName, PORT: "8080", ...observabilityEnv }</code></pre>
+  <p>These are consumed by the <span class="ic">aws_distro</span> configurator that the re-exec activates; the
+  runtime supplies the actual OTLP endpoint internally (it is intentionally not exposed as an env var).</p>
+</div>
+
+<h2>Prerequisite: CloudWatch Transaction Search <span class="badge-note">per account/region</span></h2>
+
+<div class="card">
+  <p>Spans are only indexed into <span class="ic">aws/spans</span> when <strong>Transaction Search</strong> is
+  enabled — a one-time setup per account/region. Without it, agents emit spans but nothing is queryable, and
+  Evaluations produces nothing. Check and enable via API:</p>
+  <pre><code># status: "CloudWatchLogs" + "ACTIVE" = enabled; "XRay" = not enabled
+aws xray get-trace-segment-destination --region &lt;region&gt;
+
+# enable: (1) allow X-Ray to write spans to CloudWatch Logs
+aws logs put-resource-policy --policy-name TransactionSearchXRayAccess \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"TransactionSearchXRayAccess",
+    "Effect":"Allow","Principal":{"Service":"xray.amazonaws.com"},"Action":"logs:PutLogEvents",
+    "Resource":["arn:aws:logs:REGION:ACCOUNT:log-group:aws/spans:*",
+                "arn:aws:logs:REGION:ACCOUNT:log-group:/aws/application-signals/data:*"],
+    "Condition":{"ArnLike":{"aws:SourceArn":"arn:aws:xray:REGION:ACCOUNT:*"},
+                 "StringEquals":{"aws:SourceAccount":"ACCOUNT"}}}]}'
+# (2) point trace segments at CloudWatch Logs
+aws xray update-trace-segment-destination --destination CloudWatchLogs</code></pre>
+  <p>Status goes <span class="ic">PENDING</span> → <span class="ic">ACTIVE</span> in a few minutes, and only
+  spans generated <em>after</em> activation are indexed. Because Transaction Search is account/region-scoped —
+  not a stack resource — FlowAMP does not create it in CDK; it's an operator prerequisite. Evaluations are
+  therefore <strong>per-account</strong>: cross-account agents are scored in the account they run in.</p>
+</div>
+
+<h2>Verifying it works</h2>
+
+<div class="card">
+  <h3>1. The agent bootstrapped ADOT</h3>
+  <p>In the agent's runtime log group (<span class="ic">/aws/bedrock-agentcore/runtimes/&lt;name&gt;-&lt;id&gt;-DEFAULT</span>),
+  a working run shows rich OTEL resource attributes and:</p>
+  <pre><code>telemetry.auto.version: 0.18.0-aws        # ADOT active (re-exec worked)
+aws.service.type: gen_ai_agent
+# and the benign: "Attempting to instrument while already instrumented"
+#   → the OpenInference processor engaged
+# A FAILURE looks like: "otel auto-instrument re-exec skipped: ..."  or a
+#   ProxyTracerProvider warning → the wrapper didn't run.</code></pre>
+
+  <h3>2. Spans reached aws/spans</h3>
+  <p>Do NOT trust <span class="ic">storedBytes</span> on the log group — it lags for hours and reads 0 even when
+  spans are flowing. Filter for recent events instead:</p>
+  <pre><code>aws logs filter-log-events --log-group-name aws/spans \
+  --start-time $(( ($(date +%s) - 900) * 1000 )) --max-items 5 --region &lt;region&gt;
+# real spans have names like: "chat &lt;model&gt;", "execute_tool &lt;tool&gt;",
+# "execute_event_loop_cycle", each with a populated traceId.</code></pre>
+  <p>FlowAMP's readiness endpoint uses this same recent-events probe (not <span class="ic">storedBytes</span>):
+  <span class="ic">GET /evaluations</span> → <span class="ic">readiness.spansPresent</span>.</p>
+
+  <h3>3. Scores appear (the slow part)</h3>
+  <p>Even with spans flowing, a score only lands after a <em>covered</em> agent runs a <strong>new</strong>
+  session (the sampler doesn't backfill old ones), the session completes (its
+  <span class="ic">sessionTimeoutMinutes</span> of inactivity), and AgentCore's recurring sampler grades it —
+  typically ~10–30 min end to end. An idle fleet produces no scores.</p>
+</div>
+
+<h2>Troubleshooting</h2>
+
+<table>
+  <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  <tr><td>Log shows "re-exec skipped"</td><td>Auto-instrument entry point not importable in the bundle</td><td>Confirm <span class="ic">aws-opentelemetry-distro</span> vendored into the bundle root; check <span class="ic">PYTHONPATH</span> includes the bundle dir.</td></tr>
+  <tr><td>"ProxyTracerProvider … no add_span_processor"</td><td>ADOT never initialized (wrapper didn't run) OR processor attached at import, too early</td><td>Ensure <span class="ic">AGENT_OBSERVABILITY_ENABLED=true</span> is set on the runtime; attach the processor lazily on first invoke.</td></tr>
+  <tr><td>Spans present, no eval scores</td><td>No eval config, or no new session since enabling, or still within the sampling window</td><td>Enable evaluations (<span class="ic">POST /evaluations/enable</span>), invoke a covered agent, wait ~10–30 min.</td></tr>
+  <tr><td>aws/spans empty, agents ran</td><td>Transaction Search not enabled in this account/region</td><td>Enable it (above); wait for <span class="ic">ACTIVE</span> + ~10 min backfill; re-run agents.</td></tr>
+  <tr><td>Readiness says "no spans" but they exist</td><td>Reading <span class="ic">storedBytes</span> (lags hours)</td><td>Probe recent events with <span class="ic">filter_log_events</span> — this is what the shipped readiness check does.</td></tr>
+</table>
+
+<div class="card" style="border-color: var(--accent); margin-top: 2rem;">
+  <strong>💡 Summary:</strong> the one-shot in-process re-exec runs a Strands agent on <em>direct-code</em>
+  AgentCore Runtime under <span class="ic">opentelemetry-instrument</span> without switching to a container
+  image — preserving the no-Docker, managed-runtime design while enabling AgentCore Observability and
+  Evaluations.
+</div>
+
+<div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;">
+  <p>FlowAMP · OpenTelemetry / AgentCore Observability Developer Guide · reflects the current implementation.</p>
+  <p>Source: <span class="ic">assetsSrc/agents/*/main.py</span> (OTEL re-exec + processor),
+  <span class="ic">cdk/lib/team-stack.ts</span> / <span class="ic">sample-agents-stack.ts</span> (observabilityEnv),
+  <span class="ic">assetsSrc/lambda/data-handler/index.py</span> (readiness probe),
+  <span class="ic">assetsSrc/lambda/eval-provisioner/index.py</span> (online eval configs).</p>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Operating Policies (AOP) — Developer Guide (FlowAMP)</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --orange: #fb923c; --code-bg: #0d1117; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: #fff; }
+  p, li { color: var(--text); margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; overflow-x: auto; }
+  code { font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); }
+  .ic { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--accent); font-family: 'SF Mono', Consolas, monospace; }
+  ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { padding: 0.75rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--card); color: var(--accent); }
+  td { background: var(--bg); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .badge-demo { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .badge-prod { background: rgba(74,222,128,0.15); color: var(--green); }
+  .flow { display: flex; flex-direction: column; gap: 0; margin: 1rem 0; }
+  .flow-node { margin-left: 18px; padding: 12px 16px; border-radius: 8px; border-left: 4px solid var(--accent); background: var(--code-bg); font-size: 0.9rem; }
+  .flow-node.trigger { border-left-color: var(--red); }
+  .flow-node.decision { border-left-color: var(--orange); }
+  .flow-node.action { border-left-color: var(--green); }
+  .flow-node.guardrail { border-left-color: #b388ff; }
+  .flow-node.escalation { border-left-color: var(--yellow); }
+  .flow-connector { width: 2px; height: 10px; background: var(--border); margin-left: 30px; }
+  .flow-label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .flow-label.trigger { color: var(--red); }
+  .flow-label.decision { color: var(--orange); }
+  .flow-label.action { color: var(--green); }
+  .flow-label.guardrail { color: #b388ff; }
+  .flow-label.escalation { color: var(--yellow); }
+  .signal-box { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<h1>📋 Agent Operating Policies (AOP) — Developer Guide</h1>
+<p class="subtitle">FlowAMP — AI Agent Governance on AWS · What the AOP tab actually is today, and what a real enforcement engine would require</p>
+
+<div class="card" style="border-color: var(--yellow);">
+  <strong>⚠️ Read this first — AOP is a demo/illustrative surface.</strong> In FlowAMP <em>today</em> the AOP tab is a
+  <strong>catalog of sample policies</strong>: descriptive metadata plus a hand-authored workflow diagram per policy. There is
+  <strong>no AOP enforcement engine, no work-item runtime, and no write path</strong> for AOPs in this repo. Nothing here
+  triggers agents, checks guardrails, or escalates to a human at runtime. The "Demo → Production" and
+  "AgentCore-Native AOP Enforcement" sections below describe an <em>aspirational future</em> design — they are not built.
+</div>
+
+<div class="card">
+  <strong>What is an AOP (conceptually)?</strong> An Agent Operating Policy is meant to define <em>when</em> an agent activates,
+  <em>what</em> it's allowed to do, <em>which guardrails</em> constrain it, and <em>when</em> it must escalate to a human. In FlowAMP
+  it currently exists only as <strong>descriptive metadata</strong> surfaced in the UI. Turning it into an
+  <strong>enforceable runtime contract</strong> (EventBridge rules, Bedrock Guardrails, Step Functions, scoped IAM) is future work.
+</div>
+
+<h2>Where the AOP tab data actually comes from</h2>
+
+<div class="card">
+  <p>The AOP tab is rendered entirely <strong>client-side from a hardcoded JavaScript array</strong> — it does <strong>not</strong>
+  call the backend. In <span class="ic">assetsSrc/site/agent-management.html</span>:</p>
+  <ul>
+    <li><span class="ic">const aopsData = [ … ]</span> — 14 sample policies (<span class="ic">AOP-01</span>…<span class="ic">AOP-14</span>), baked into the page.</li>
+    <li><span class="ic">renderAops(filter)</span> renders cards straight from <span class="ic">aopsData</span>; <span class="ic">filterAops</span> / <span class="ic">toggleAop</span> / <span class="ic">toggleEntry</span> just filter and expand it.</li>
+    <li><span class="ic">saveAopEdit(id)</span> ("✏️ Edit Workflow") mutates the in-memory array only and calls a client-side <span class="ic">logAudit</span> — <strong>nothing is persisted</strong>; a page reload discards the change.</li>
+  </ul>
+  <p>There is a separate <span class="ic">GET /aops</span> REST route (see below), but the AOP tab does <strong>not</strong> consume it — the numbers you see in the UI are the hardcoded array, not DynamoDB.</p>
+</div>
+
+<h3>UI data model (the real <span class="ic">aopsData</span> shape)</h3>
+
+<pre><code>// assetsSrc/site/agent-management.html
+const aopsData = [
+  {
+    id:          "AOP-01",
+    name:        "Service Degradation Response",
+    status:      "active",                 // "active" | "draft" | "review"
+    sop:         "SOP-OPS-01",             // rendered as "Source" in the card
+    agents:      ["Service Health Monitor", "Production Line Monitor"],
+    executions:  12450,                    // static number, illustrative only
+    successRate: 97.8,                     // static number, illustrative only
+    lastRun:     "15 sec ago",             // static string, illustrative only
+    owner:       "Operations",
+    entry:       "Service latency exceeds SLA threshold for 5 consecutive minutes",
+    nodes: [                               // hand-authored workflow diagram (NOT executed)
+      { type:"action",   label:"Ingest",   text:"…", tools:["Monitoring API","Metrics Stream"] },
+      { type:"decision", label:"Detect",   text:"…", tools:["Threshold Engine"] },
+      // … node.type is one of: "action" | "decision" | "output"
+    ]
+  },
+  // … 13 more sample policies
+];</code></pre>
+
+<div class="card">
+  <p><strong>Every number is static seed/demo content.</strong> <span class="ic">executions</span>, <span class="ic">successRate</span>,
+  and <span class="ic">lastRun</span> are literals in the array — they are not computed from any live agent runs. The
+  <span class="ic">nodes</span> flow diagram is illustrative documentation of an intended workflow; FlowAMP does not run it.</p>
+</div>
+
+<h2>Backend model &amp; the <span class="ic">GET /aops</span> route <span class="badge badge-demo">DEMO / SEED-ONLY</span></h2>
+
+<div class="card">
+  <p>FlowAMP uses a <strong>single DynamoDB table</strong> (<span class="ic">AgentTable</span>, PK <span class="ic">agentId</span> +
+  SK <span class="ic">sk</span>). AOP rows are stored under the <span class="ic">aop:</span> prefix with <span class="ic">sk = "INFO"</span>.
+  The data-handler Lambda exposes a <strong>read-only</strong> route (<span class="ic">assetsSrc/lambda/data-handler/index.py</span>,
+  wired in <span class="ic">cdk/lib/team-stack.ts</span>):</p>
+  <pre><code># assetsSrc/lambda/data-handler/index.py
+if path.endswith('/aops'):
+    return _resp(200, _project(get_by_prefix('aop:'), _AOP_FIELDS))
+
+# Only these fields are ever returned:
+_AOP_FIELDS = {'agentId', 'aopId', 'name', 'status', 'agents', 'executions',
+               'successRate', 'owner', 'entry'}</code></pre>
+  <p>A DynamoDB AOP row (as seeded) looks like:</p>
+  <pre><code>{
+  "agentId":     "aop:AOP-01",   // partition key (PK), sk = "INFO"
+  "aopId":       "AOP-01",
+  "name":        "Service Degradation Response",
+  "status":      "active",        // "active" | "draft" | "review"
+  "agents":      "Service Health Monitor, Incident Prediction Agent",  // comma-joined string
+  "executions":  12450,           // static seed value
+  "successRate": 97.8,            // static seed value (Decimal in the table)
+  "owner":       "Operations",
+  "entry":       "Service latency exceeds SLA threshold for 5 consecutive minutes"
+}</code></pre>
+</div>
+
+<div class="card" style="border-color: var(--yellow);">
+  <h3>Two things to be honest about here <span class="badge badge-demo">IMPORTANT</span></h3>
+  <ol>
+    <li><strong>These rows only exist when <span class="ic">seedSampleData=true</span>, which defaults to FALSE.</strong>
+    They are written once by the seed-data Lambda (<span class="ic">assetsSrc/lambda/seed-data/index.py</span>, <span class="ic">AOP_DATA</span>).
+    A default production deploy has <strong>zero AOP rows</strong>, so <span class="ic">GET /aops</span> returns <span class="ic">[]</span>.</li>
+    <li><strong>There is no AOP write path.</strong> The data-handler's only write routes are
+    <span class="ic">POST /agents</span>, <span class="ic">PATCH /agents/{agentId}</span>, and
+    <span class="ic">POST /agents/{agentId}/lifecycle</span> — all for agents. AOPs can only be created by re-running the seed
+    Lambda; the UI cannot create, edit, or delete an AOP in DynamoDB.</li>
+  </ol>
+  <p>Note the UI's hardcoded <span class="ic">aopsData</span> array and the seed <span class="ic">AOP_DATA</span> are separate copies
+  of the same 14 sample policies. The AOP tab renders the JS array; it does not fetch <span class="ic">/aops</span>.</p>
+</div>
+
+<h2>The 14 sample policies</h2>
+
+<p>These are the sample AOPs shipped in <span class="ic">aopsData</span> (UI) / <span class="ic">AOP_DATA</span> (seed). They span
+generic cross-industry operations — ops, supply chain, security, finance, facilities — as illustrative examples. All numbers
+are static demo values.</p>
+
+<table>
+  <thead><tr><th>ID</th><th>Policy</th><th>Status</th><th>Agents (sample)</th><th>Owner</th><th>Executions</th><th>Success</th></tr></thead>
+  <tbody>
+    <tr><td>AOP-01</td><td>Service Degradation Response</td><td style="color:#4ade80">active</td><td>Service Health Monitor, Incident Prediction Agent</td><td>Operations</td><td>12,450</td><td>97.8%</td></tr>
+    <tr><td>AOP-02</td><td>Inventory Replenishment Optimization</td><td style="color:#4ade80">active</td><td>Inventory Optimization, Demand Forecast</td><td>Supply Chain</td><td>3,890</td><td>95.2%</td></tr>
+    <tr><td>AOP-03</td><td>Network Intrusion Detection</td><td style="color:#4ade80">active</td><td>Network Anomaly Detector, Incident Response</td><td>Security Operations</td><td>8,920</td><td>99.1%</td></tr>
+    <tr><td>AOP-04</td><td>Asset Health Assessment</td><td style="color:#4ade80">active</td><td>Asset Health Monitor, Predictive Maintenance</td><td>Asset Management</td><td>2,156</td><td>94.5%</td></tr>
+    <tr><td>AOP-05</td><td>Daily Risk Position Review</td><td style="color:#4ade80">active</td><td>Fraud Detection, Portfolio Risk</td><td>Finance</td><td>1,095</td><td>93.8%</td></tr>
+    <tr><td>AOP-06</td><td>Data Privacy Breach Response</td><td style="color:#4ade80">active</td><td>Data Privacy Monitor, Incident Response</td><td>Privacy Office</td><td>4,567</td><td>96.3%</td></tr>
+    <tr><td>AOP-07</td><td>Demand Surge Capacity Staging</td><td style="color:#4ade80">active</td><td>Incident Prediction, Throughput Optimization</td><td>Operations</td><td>876</td><td>91.4%</td></tr>
+    <tr><td>AOP-08</td><td>Customer Churn Intervention</td><td style="color:#4ade80">active</td><td>Churn Prediction, Usage Analytics</td><td>Customer Operations</td><td>2,340</td><td>94.9%</td></tr>
+    <tr><td>AOP-09</td><td>Equipment Inspection Workflow</td><td style="color:#4ade80">active</td><td>Equipment Integrity, Incident Response</td><td>Facilities</td><td>312</td><td>97.1%</td></tr>
+    <tr><td>AOP-10</td><td>Order Fulfillment Load Management</td><td style="color:#4ade80">active</td><td>Order Validation, Logistics Routing</td><td>Customer Operations</td><td>5,670</td><td>95.7%</td></tr>
+    <tr><td>AOP-11</td><td>Financial Close Reconciliation</td><td style="color:#fb923c">draft</td><td>AP Automation, Revenue Forecast</td><td>Finance</td><td>0</td><td>—</td></tr>
+    <tr><td>AOP-12</td><td>Production Line Failover</td><td style="color:#fb923c">draft</td><td>Production Line Monitor, Machine Performance</td><td>Manufacturing</td><td>0</td><td>—</td></tr>
+    <tr><td>AOP-13</td><td>High-Risk Transaction Hold</td><td style="color:#38bdf8">review</td><td>Fraud Detection, Access Validation</td><td>Risk &amp; Compliance</td><td>45</td><td>88.9%</td></tr>
+    <tr><td>AOP-14</td><td>Critical System Access Revocation</td><td style="color:#38bdf8">review</td><td>Access Validation, Incident Response</td><td>Security Operations</td><td>128</td><td>100%</td></tr>
+  </tbody>
+</table>
+
+<h2>The AOP / work-item runtime is intentionally stubbed <span class="badge badge-demo">STUBBED</span></h2>
+
+<div class="card" style="border-color: var(--yellow);">
+  <p>FlowAMP's governance agents (<span class="ic">discovery-scanner</span>, <span class="ic">compliance-scanner</span>) reference an
+  AOP/work-item runtime that is not part of this deployment. <strong>Those work-item tools are safe no-ops.</strong>
+  From the repo README (Notes):</p>
+  <blockquote style="border-left: 3px solid var(--yellow); padding-left: 1rem; color: var(--muted); margin: 0.75rem 0;">
+    "Their AOP / work-item orchestration is intentionally stubbed (no work-item runtime here), so those tools are safe no-ops."
+  </blockquote>
+  <p>And from <span class="ic">assetsSrc/agents/_shared/flowamp_tools/work_items.py</span>:</p>
+  <blockquote style="border-left: 3px solid var(--yellow); padding-left: 1rem; color: var(--muted); margin: 0.75rem 0;">
+    "This repo has no AOP runtime and no WorkItemTable, so the governance agents run in <strong>one-shot mode</strong>
+    (invoked directly, no workItemId). … they are provided here as safe no-ops: each logs its call and returns well-formed JSON,
+    but writes nothing."
+  </blockquote>
+  <p>Concretely: <span class="ic">create_work_item</span> / <span class="ic">close_assigned_work_item</span> in
+  <span class="ic">compliance-scanner/tools.py</span> and <span class="ic">flowamp_tools/work_items.py</span> return synthetic,
+  non-persisted IDs. The <span class="ic">finalize_audit</span> escalation path preserves the call shape "so a future AOP runtime"
+  could be wired in, but today nothing is dispatched, held, or escalated.</p>
+</div>
+
+<div class="card">
+  <h3>The one place AOPs feed a live behavior: the compliance scorer</h3>
+  <p>The compliance checks package defines an <span class="ic">aop-coverage</span> transparency check
+  (<span class="ic">assetsSrc/agents/_shared/flowamp_compliance_checks/checks/transparency.py</span>, <span class="ic">class AopCoverage</span>):
+  "at least one active AOP references this agent." It reads an <span class="ic">AOP_TABLE_NAME</span> environment variable and queries
+  for AOP rows referencing the agent. In this single-table repo that env var is not wired to a dedicated AOP table, so the check
+  degrades to a "not set / cannot check" evidence result rather than a real coverage signal. It is scored (e.g. NIST AI RMF
+  Govern, baseline transparency) but should be read as illustrative given the seed-only AOP data.</p>
+</div>
+
+<h2>Demo → Production: What an Enforcement Engine Would Add</h2>
+
+<p class="subtitle" style="margin-bottom:1rem;">Everything below this line is <strong>aspirational / not built</strong>. It documents the design a real AOP
+enforcement engine would need — none of these AWS resources are created by FlowAMP today.</p>
+
+<div class="card">
+  <h3>What FlowAMP does today <span class="badge badge-demo">DEMO</span></h3>
+  <p>AOPs are <strong>descriptive metadata</strong> — a hardcoded UI array (and optional seed rows in DynamoDB) with name, agents,
+  a trigger condition as a text string, and static execution/success numbers. The frontend renders them as cards with expandable
+  flow diagrams. <strong>Nothing enforces the policy at runtime</strong>, and there is no work-item dispatch, escalation, or write path.</p>
+
+  <h3>What a production enforcement engine would need <span class="badge badge-prod">NOT BUILT</span></h3>
+  <p>Each AOP becomes an <strong>enforceable runtime contract</strong> composed of AWS primitives:</p>
+  <ul>
+    <li><strong>Trigger</strong> → EventBridge Rule (pattern match on IoT, CloudWatch Alarm, schedule, or API call)</li>
+    <li><strong>Decision</strong> → Bedrock Agent invocation with constrained prompt + Guardrails</li>
+    <li><strong>Action</strong> → Lambda execution with scoped IAM role (least-privilege per AOP)</li>
+    <li><strong>Guardrail</strong> → Bedrock Guardrail with AOP-specific content/topic/PII filters</li>
+    <li><strong>Escalation</strong> → SNS → PagerDuty / human-in-the-loop approval via Step Functions</li>
+    <li><strong>Audit</strong> → CloudTrail + DynamoDB execution log with full trace</li>
+  </ul>
+</div>
+
+<h2>Anatomy of a hypothetical enforceable AOP <span class="badge badge-prod">NOT BUILT</span></h2>
+
+<p class="subtitle" style="margin-bottom:1rem;">This is a <strong>design sketch</strong>, not FlowAMP's current row shape. The real row today has only the nine
+<span class="ic">_AOP_FIELDS</span> shown earlier. The example below uses sample policy <span class="ic">AOP-03</span> (Network Intrusion
+Detection) to show the extra fields an enforcement engine would need.</p>
+
+<div class="card">
+  <h3>Enhanced Data Model (illustrative)</h3>
+  <pre><code>{
+  "agentId":       "aop:AOP-03",
+  "aopId":         "AOP-03",
+  "name":          "Network Intrusion Detection",
+  "status":        "active",
+  "owner":         "Security Operations",
+  "version":       3,
+  "lastUpdated":   "2026-04-15T14:30:00Z",
+  "approvedBy":    "ciso@company.com",
+
+  // --- TRIGGER (EventBridge) ---
+  "trigger": {
+    "type":        "eventbridge",
+    "source":      "aws.securityhub",
+    "detailType":  "Network Anomaly Alert",
+    "pattern":     {"source": ["aws.securityhub"], "detail": {"signalType": ["network_traffic"]}},
+    "ruleArn":     "arn:aws:events:us-east-1:123456789:rule/aop-03-trigger"
+  },
+
+  // --- AGENTS (who executes) ---
+  "agents": [
+    {"agentId": "network-anomaly-detector", "role": "primary", "action": "analyze_traffic_pattern"},
+    {"agentId": "incident-response", "role": "secondary", "action": "create_incident_ticket"}
+  ],
+
+  // --- GUARDRAILS (constraints) ---
+  "guardrails": {
+    "guardrailId":   "gr-secops-001",
+    "maxLatencyMs":  5000,
+    "deniedActions": ["disable_firewall", "grant_admin_access"],
+    "requiredPII":   "BLOCK",
+    "contentFilter": "HIGH"
+  },
+
+  // --- ESCALATION (human-in-the-loop) ---
+  "escalation": {
+    "condition":     "confidence < 0.85 OR severity == 'critical'",
+    "target":        "arn:aws:sns:us-east-1:123456789:secops-oncall",
+    "approvalRequired": true,
+    "timeoutMinutes": 15,
+    "fallbackAction": "isolate_network_segment"
+  },
+
+  // --- BOUNDARIES (what the agent CANNOT do) ---
+  "boundaries": {
+    "maxTokensPerInvocation": 4096,
+    "maxCostPerExecution":    0.50,
+    "allowedServices":        ["dynamodb", "sns", "cloudwatch"],
+    "deniedServices":         ["ec2", "iam", "s3"],
+    "dataClassification":     "CONFIDENTIAL",
+    "retentionDays":          2555
+  },
+
+  // --- METRICS (runtime tracking) ---
+  "executions":    8920,
+  "successRate":   99.1,
+  "avgLatencyMs":  45,
+  "lastExecution": "2026-04-29T14:22:00Z",
+  "violations":    0
+}</code></pre>
+</div>
+
+<h2>Example: AOP-03 Hypothetical Enforcement Flow <span class="badge badge-prod">NOT BUILT</span></h2>
+
+<div class="card">
+  <p><strong>Network Intrusion Detection</strong> — how enforcement <em>would</em> flow when anomalous network traffic is detected
+  (illustrative — FlowAMP does not run any of this):</p>
+
+  <div class="flow">
+    <div class="flow-node trigger">
+      <div class="flow-label trigger">① TRIGGER — EventBridge</div>
+      Security signal published → EventBridge rule <span class="ic">aop-03-trigger</span> matches pattern <span class="ic">{"source": ["aws.securityhub"], "detail": {"signalType": ["network_traffic"]}}</span>
+    </div>
+    <div class="flow-connector"></div>
+    <div class="flow-node guardrail">
+      <div class="flow-label guardrail">② GUARDRAIL CHECK — Pre-Invocation</div>
+      Before invoking agent: verify AOP is <span class="ic">active</span>, check cost budget not exceeded, validate input against Bedrock Guardrail <span class="ic">gr-secops-001</span> (block PII, enforce content filters)
+    </div>
+    <div class="flow-connector"></div>
+    <div class="flow-node decision">
+      <div class="flow-label decision">③ DECISION — Bedrock Agent</div>
+      Network Anomaly Detector agent analyzes traffic pattern. Uses action group tools: <span class="ic">query_traffic_baseline</span>, <span class="ic">compare_known_signatures</span>, <span class="ic">assess_threat_level</span>. Returns confidence score + severity.
+    </div>
+    <div class="flow-connector"></div>
+    <div class="flow-node escalation">
+      <div class="flow-label escalation">④ ESCALATION GATE — Step Functions</div>
+      If <span class="ic">confidence &lt; 0.85</span> OR <span class="ic">severity == 'critical'</span> → pause execution, send SNS to SecOps on-call, wait up to 15 min for human approval. Timeout → execute <span class="ic">isolate_network_segment</span> automatically.
+    </div>
+    <div class="flow-connector"></div>
+    <div class="flow-node action">
+      <div class="flow-label action">⑤ ACTION — Lambda (scoped IAM)</div>
+      Incident Response Agent creates incident ticket, logs to DynamoDB, sends CloudWatch metric. IAM role only allows <span class="ic">dynamodb:PutItem</span>, <span class="ic">sns:Publish</span>, <span class="ic">cloudwatch:PutMetricData</span>. Cannot touch EC2, IAM, or S3.
+    </div>
+    <div class="flow-connector"></div>
+    <div class="flow-node" style="border-left-color: var(--muted);">
+      <div class="flow-label" style="color: var(--muted);">⑥ AUDIT — CloudTrail + DynamoDB</div>
+      Full execution trace written: trigger event, agent reasoning (Bedrock trace), guardrail checks, escalation decision, action taken, latency, cost. Retained per the applicable compliance retention requirement.
+    </div>
+  </div>
+</div>
+
+<h2>CDK Implementation (reference design) <span class="badge badge-prod">NOT BUILT</span></h2>
+
+<p class="subtitle" style="margin-bottom:1rem;">None of the constructs below exist in FlowAMP's CDK today (there is no <span class="ic">AOPEngine</span> state machine,
+no <span class="ic">aop-validator</span> Lambda, and no per-AOP EventBridge rules or IAM roles). This is a blueprint for what an
+enforcement engine <em>would</em> add.</p>
+
+<div class="card">
+  <h3>AOP Enforcement Engine (Step Functions + EventBridge)</h3>
+  <pre><code>// For each active AOP, create an EventBridge rule → Step Function → Agent
+const aopEngine = new sfn.StateMachine(this, 'AOPEngine', {
+  definitionBody: sfn.DefinitionBody.fromChainable(
+    // Step 1: Validate AOP is active + budget check
+    new tasks.LambdaInvoke(this, 'ValidateAOP', {
+      lambdaFunction: aopValidatorFn,
+      resultPath: '$.validation',
+    })
+    // Step 2: Pre-invocation guardrail check
+    .next(new sfn.Choice(this, 'AOPActive?')
+      .when(sfn.Condition.stringEquals('$.validation.Payload.status', 'blocked'),
+        new sfn.Fail(this, 'AOPBlocked', { cause: 'AOP inactive or budget exceeded' }))
+      .otherwise(
+        // Step 3: Invoke Bedrock Agent
+        new tasks.LambdaInvoke(this, 'InvokeAgent', {
+          lambdaFunction: agentHandlerFn,
+          resultPath: '$.agentResult',
+        })
+        // Step 4: Escalation gate
+        .next(new sfn.Choice(this, 'NeedsEscalation?')
+          .when(sfn.Condition.or(
+            sfn.Condition.numberLessThan('$.agentResult.Payload.confidence', 0.85),
+            sfn.Condition.stringEquals('$.agentResult.Payload.severity', 'critical')),
+            // Human approval with timeout
+            new tasks.SnsPublish(this, 'EscalateToHuman', {
+              topic: escalationTopic,
+              message: sfn.TaskInput.fromJsonPathAt('$.agentResult.Payload'),
+            }).next(new tasks.CallAwsService(this, 'WaitForApproval', {
+              service: 'sfn', action: 'getActivityTaskOutput',
+              // ... approval wait logic with 15-min timeout
+            })))
+          .otherwise(
+            // Step 5: Execute action
+            new tasks.LambdaInvoke(this, 'ExecuteAction', {
+              lambdaFunction: actionExecutorFn,
+              resultPath: '$.actionResult',
+            })))
+        // Step 6: Audit log
+        .next(new tasks.DynamoPutItem(this, 'AuditLog', {
+          table: agentTable,
+          item: { /* execution trace */ },
+        }))
+      )
+    ),
+  timeout: cdk.Duration.minutes(20),
+});
+
+// Create EventBridge rules for each AOP trigger pattern
+// Example: AOP-03 Network Intrusion Detection trigger
+new events.Rule(this, 'AOP-03-Trigger', {
+  eventPattern: {
+    source: ['aws.securityhub'],
+    detailType: ['Network Anomaly Alert'],
+    detail: { signalType: ['network_traffic'] },
+  },
+  targets: [new targets.SfnStateMachine(aopEngine, {
+    input: events.RuleTargetInput.fromObject({
+      aopId: 'AOP-03',
+      event: events.EventField.fromPath('$.detail'),
+    }),
+  })],
+});</code></pre>
+
+  <h3>AOP Validator Lambda</h3>
+  <pre><code>const aopValidatorFn = new lambda.Function(this, 'AOPValidatorFn', {
+  runtime: lambda.Runtime.PYTHON_3_12,
+  handler: 'index.handler',
+  code: lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'aop-validator')),
+  environment: { AGENT_TABLE_NAME: agentTable.tableName },
+  timeout: cdk.Duration.seconds(10),
+});
+agentTable.grantReadData(aopValidatorFn);</code></pre>
+
+  <h3>AOP Validator Logic</h3>
+  <pre><code>def handler(event, context):
+    aop_id = event['aopId']
+    aop = table.get_item(Key={'agentId': f'aop:{aop_id}'}).get('Item')
+
+    if not aop or aop.get('status') != 'active':
+        return {'status': 'blocked', 'reason': 'AOP not active'}
+
+    # Budget check — has this AOP exceeded its daily cost limit?
+    boundaries = json.loads(aop.get('boundaries', '{}'))
+    max_cost = boundaries.get('maxCostPerExecution', 1.0)
+    today_cost = get_today_cost(aop_id)
+    daily_limit = max_cost * 1000  # max 1000 executions/day at max cost
+    if today_cost >= daily_limit:
+        return {'status': 'blocked', 'reason': 'Daily cost limit exceeded'}
+
+    # Version check — ensure latest approved version
+    if aop.get('approvedBy') is None:
+        return {'status': 'blocked', 'reason': 'AOP not approved'}
+
+    return {
+        'status': 'allowed',
+        'aop': aop,
+        'guardrailId': aop.get('guardrails', {}).get('guardrailId'),
+        'agents': aop.get('agents', []),
+        'escalation': aop.get('escalation', {}),
+    }</code></pre>
+
+  <h3>Scoped IAM Roles per AOP</h3>
+  <pre><code>// Each AOP gets a dedicated IAM role with only the services it needs
+const aop03Role = new iam.Role(this, 'AOP-03-Role', {
+  assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+});
+// AOP-03 can only write to DynamoDB, publish to SNS, put CW metrics
+aop03Role.addToPolicy(new iam.PolicyStatement({
+  actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem'],
+  resources: [agentTable.tableArn],
+}));
+aop03Role.addToPolicy(new iam.PolicyStatement({
+  actions: ['sns:Publish'],
+  resources: [escalationTopic.topicArn],
+}));
+aop03Role.addToPolicy(new iam.PolicyStatement({
+  actions: ['cloudwatch:PutMetricData'],
+  resources: ['*'],
+}));
+// Explicit deny on dangerous services
+aop03Role.addToPolicy(new iam.PolicyStatement({
+  effect: iam.Effect.DENY,
+  actions: ['ec2:*', 'iam:*', 's3:Delete*'],
+  resources: ['*'],
+}));</code></pre>
+</div>
+
+<h2>AOP Metrics &amp; Monitoring</h2>
+
+<div class="card">
+  <p>Each AOP execution emits CloudWatch metrics for the dashboard:</p>
+
+  <table>
+    <tr><th>Metric</th><th>Namespace</th><th>Dimensions</th><th>Source</th></tr>
+    <tr><td>Executions</td><td>FlowAMP/AOP</td><td>AOPId, Status (success/fail)</td><td>Step Functions execution count</td></tr>
+    <tr><td>SuccessRate</td><td>FlowAMP/AOP</td><td>AOPId</td><td>Succeeded / Total × 100</td></tr>
+    <tr><td>Latency</td><td>FlowAMP/AOP</td><td>AOPId</td><td>Step Functions execution duration</td></tr>
+    <tr><td>EscalationRate</td><td>FlowAMP/AOP</td><td>AOPId</td><td>Escalations / Total × 100</td></tr>
+    <tr><td>GuardrailBlocks</td><td>FlowAMP/AOP</td><td>AOPId</td><td>Pre-invocation guardrail rejections</td></tr>
+    <tr><td>CostPerExecution</td><td>FlowAMP/AOP</td><td>AOPId</td><td>Bedrock tokens + Lambda duration + Step Functions</td></tr>
+    <tr><td>Violations</td><td>FlowAMP/AOP</td><td>AOPId</td><td>Boundary breaches (cost, latency, denied service)</td></tr>
+  </table>
+
+  <h3>Metrics Emitter (in action executor Lambda)</h3>
+  <pre><code>def emit_aop_metrics(aop_id, success, latency_ms, cost, escalated, violation):
+    cw = boto3.client('cloudwatch')
+    cw.put_metric_data(Namespace='FlowAMP/AOP', MetricData=[
+        {'MetricName': 'Executions', 'Value': 1, 'Unit': 'Count',
+         'Dimensions': [{'Name': 'AOPId', 'Value': aop_id},
+                        {'Name': 'Status', 'Value': 'success' if success else 'fail'}]},
+        {'MetricName': 'Latency', 'Value': latency_ms, 'Unit': 'Milliseconds',
+         'Dimensions': [{'Name': 'AOPId', 'Value': aop_id}]},
+        {'MetricName': 'CostPerExecution', 'Value': cost, 'Unit': 'None',
+         'Dimensions': [{'Name': 'AOPId', 'Value': aop_id}]},
+        {'MetricName': 'EscalationRate', 'Value': 1 if escalated else 0, 'Unit': 'Count',
+         'Dimensions': [{'Name': 'AOPId', 'Value': aop_id}]},
+        {'MetricName': 'Violations', 'Value': 1 if violation else 0, 'Unit': 'Count',
+         'Dimensions': [{'Name': 'AOPId', 'Value': aop_id}]},
+    ])</code></pre>
+</div>
+
+<h2>AOP Lifecycle</h2>
+
+<div class="card">
+  <table>
+    <tr><th>Status</th><th>Meaning</th><th>Enforcement</th></tr>
+    <tr><td style="color:#fb923c"><strong>draft</strong></td><td>Policy being authored. No trigger, no execution.</td><td>EventBridge rule does not exist. Agent cannot be invoked under this AOP.</td></tr>
+    <tr><td style="color:#38bdf8"><strong>review</strong></td><td>Submitted for approval. May run in shadow mode.</td><td>EventBridge rule exists but targets a <em>shadow</em> Step Function that logs but does not act. Metrics collected for evaluation.</td></tr>
+    <tr><td style="color:#4ade80"><strong>active</strong></td><td>Approved and enforced. Full execution.</td><td>EventBridge rule targets production Step Function. All guardrails, escalations, and boundaries enforced.</td></tr>
+    <tr><td style="color:#f87171"><strong>suspended</strong></td><td>Temporarily disabled (incident, budget, audit).</td><td>EventBridge rule disabled. Existing in-flight executions complete but no new triggers accepted.</td></tr>
+    <tr><td style="color:#94a3b8"><strong>decommissioned</strong></td><td>Permanently retired.</td><td>EventBridge rule deleted. DynamoDB record retained for audit (retention per boundaries.retentionDays).</td></tr>
+  </table>
+</div>
+
+<h2>Summary: What Exists vs. What an Engine Would Add</h2>
+
+<table>
+  <thead><tr><th>Component</th><th>FlowAMP today (DEMO)</th><th>Enforcement engine (NOT BUILT)</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Data source</strong></td><td>Hardcoded <span class="ic">aopsData</span> JS array in the UI; optional read-only seed rows via <span class="ic">GET /aops</span> when <span class="ic">seedSampleData=true</span></td><td>Governed AOP records with a create/edit/approve write path</td></tr>
+    <tr><td><strong>Trigger</strong></td><td>Text description in <span class="ic">entry</span> field</td><td>EventBridge rule with pattern matching (CloudWatch Alarm, schedule, API, event source)</td></tr>
+    <tr><td><strong>Agent Invocation</strong></td><td>Not enforced — agents run one-shot, independent of any AOP</td><td>Step Functions orchestrates the agent call with pre/post guardrail checks</td></tr>
+    <tr><td><strong>Guardrails</strong></td><td>None wired per AOP</td><td>Per-AOP Bedrock Guardrail with specific content/PII/topic filters</td></tr>
+    <tr><td><strong>Escalation / work items</strong></td><td>Intentionally stubbed — <span class="ic">create_work_item</span> is a safe no-op (no work-item runtime)</td><td>Step Functions wait state → SNS → human approval with timeout + fallback action</td></tr>
+    <tr><td><strong>Boundaries</strong></td><td>Not implemented</td><td>Scoped IAM roles per AOP, cost limits, latency SLAs, allowed/denied services</td></tr>
+    <tr><td><strong>Metrics</strong></td><td>Static <span class="ic">executions</span> / <span class="ic">successRate</span> literals (in the UI array and seed data)</td><td>Real-time CloudWatch metrics per AOP (executions, latency, cost, escalations, violations)</td></tr>
+    <tr><td><strong>Audit</strong></td><td>Not implemented for AOPs (agent writes append EVENT# rows, but no AOP execution trace)</td><td>Full execution trace in DynamoDB + CloudTrail, retained per compliance requirements</td></tr>
+    <tr><td><strong>Lifecycle</strong></td><td>Static <span class="ic">status</span> field (active / draft / review)</td><td>Enforced lifecycle: draft → review (shadow) → active → suspended → decommissioned</td></tr>
+  </tbody>
+</table>
+
+<div class="card" style="border-color: var(--accent); margin-top: 2rem;">
+  <strong>💡 Key Insight:</strong> The AOP is <em>intended</em> to be the bridge between governance (what agents <em>should</em> do) and
+  runtime (what agents <em>actually</em> do), so that every agent invocation traces back to an AOP. FlowAMP today only models the
+  <em>governance</em> half (the catalog + the <span class="ic">aop-coverage</span> transparency check); the runtime enforcement half
+  is not built. An agent without an AOP is an ungoverned agent — a real enforcement engine would flag it and drop the NIST AI RMF
+  "Govern" function score.
+</div>
+
+<h2>AgentCore-Native AOP Enforcement (aspirational) <span class="badge badge-prod">NOT BUILT</span></h2>
+
+<div class="card" style="border-color: #b388ff;">
+  <p>The reference AOP architecture above uses Step Functions + EventBridge + Lambda + scoped IAM. With AgentCore managed services,
+  the enforcement model would simplify dramatically. (This too is a design sketch — FlowAMP does not currently use AgentCore Gateway,
+  Policy/Cedar, or Harness for AOP enforcement.)</p>
+
+  <table>
+    <thead><tr><th>AOP Component</th><th>Old (Custom)</th><th>AgentCore Service</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Trigger</strong></td><td>EventBridge rule → Step Functions</td><td><strong>Gateway</strong> interceptor</td><td>Gateway intercepts every tool call. No separate trigger infrastructure needed — the agent's tool invocation <em>is</em> the trigger.</td></tr>
+      <tr><td><strong>Boundary enforcement</strong></td><td>Per-AOP scoped IAM roles + explicit deny</td><td><strong>Policy</strong> (Cedar)</td><td>Cedar rules define which tools each agent can call, under what conditions. More expressive than IAM. No separate roles per AOP.</td></tr>
+      <tr><td><strong>Escalation</strong></td><td>Step Functions wait → SNS → human approval</td><td><strong>Policy</strong> Cedar conditions</td><td><code>forbid(...) when { context.severity == "critical" && !context.human_approved }</code> — Policy blocks the action until approval flag is set.</td></tr>
+      <tr><td><strong>Orchestration</strong></td><td>Step Functions state machine</td><td><strong>Harness</strong> [Preview]</td><td>Harness manages the agent loop (model → tool → result → model). Config-driven, not code-driven. Stateful microVM per session.</td></tr>
+      <tr><td><strong>Audit trail</strong></td><td>Custom DynamoDB writes</td><td><strong>Observability</strong></td><td>Every tool call, policy check, and model invocation emits OTEL spans automatically. No custom audit code needed.</td></tr>
+      <tr><td><strong>Metrics</strong></td><td>Custom CloudWatch <code>PutMetricData</code></td><td><strong>Observability</strong></td><td>Execution count, latency, error rate, token usage — all emitted as OTEL metrics by default.</td></tr>
+      <tr><td><strong>Agent registration</strong></td><td>DynamoDB <code>aop:*</code> records</td><td><strong>Registry</strong></td><td>AOPs registered as resources in Registry with governed publish/review/approve workflow.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Cedar Policy Example: AOP-05 Daily Risk Position Review (illustrative)</h3>
+  <pre><code>// AOP-05: Risk agent can review positions but with constraints
+permit(
+  principal == Agent::"portfolio-risk",
+  action == Action::"invoke_tool",
+  resource == Tool::"get_position"
+);
+
+permit(
+  principal == Agent::"portfolio-risk",
+  action == Action::"invoke_tool",
+  resource == Tool::"adjust_position"
+) when {
+  context.notional_usd <= 1000000 &&        // max $1M per adjustment
+  context.risk_limit_ok == true &&          // within pre-set risk limits
+  context.market == "close_of_business"      // only at market close, not intraday
+};
+
+forbid(
+  principal == Agent::"portfolio-risk",
+  action == Action::"invoke_tool",
+  resource == Tool::"adjust_position"
+) when {
+  context.notional_usd > 1000000           // large adjustments need human approval
+  && !context.human_approved
+};
+
+// Risk agent cannot access privileged access-control tools
+forbid(
+  principal == Agent::"portfolio-risk",
+  action == Action::"invoke_tool",
+  resource in [Tool::"grant_admin_access", Tool::"disable_firewall", Tool::"revoke_credentials"]
+);</code></pre>
+
+  <p>This single Cedar policy would replace: the EventBridge trigger rule, the Step Functions state machine, the AOP validator Lambda, the scoped IAM role with explicit deny, and the SNS escalation — all in ~25 lines of declarative policy.</p>
+</div>
+
+<div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;">
+  <p><strong>FlowAMP — AI Agent Governance on AWS · Agent Operating Policies Developer Guide.</strong> This guide reflects the
+  <em>current implementation</em>: the AOP tab is a demo catalog (hardcoded <span class="ic">aopsData</span> plus optional seed rows),
+  the AOP / work-item runtime is intentionally stubbed, and the enforcement engine described from "Demo → Production" onward is an
+  aspirational future design that is not built. Single DynamoDB <span class="ic">AgentTable</span> (PK <span class="ic">agentId</span>,
+  SK <span class="ic">sk</span>); agents run on model <span class="ic">us.anthropic.claude-sonnet-4-6</span>.</p>
+  <p>Sources: <span class="ic">assetsSrc/site/agent-management.html</span> (<span class="ic">aopsData</span>, <span class="ic">renderAops</span>) ·
+  <span class="ic">assetsSrc/lambda/data-handler/index.py</span> (<span class="ic">GET /aops</span>, <span class="ic">_AOP_FIELDS</span>) ·
+  <span class="ic">assetsSrc/lambda/seed-data/index.py</span> (<span class="ic">AOP_DATA</span>, <span class="ic">seedSampleData</span> default off) ·
+  <span class="ic">cdk/lib/team-stack.ts</span> (route wiring) ·
+  <span class="ic">assetsSrc/agents/_shared/flowamp_tools/work_items.py</span> (no-op work-item stubs) ·
+  <span class="ic">assetsSrc/agents/compliance-scanner/tools.py</span> · README Notes.</p>
+</div>
+
+</body>
+</html>

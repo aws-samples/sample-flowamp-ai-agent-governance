@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FinOps — Agent Cost Intelligence Developer Guide</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --orange: #fb923c; --purple: #b388ff; --code-bg: #0d1117; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+  h2 { font-size: 1.4rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; color: #fff; }
+  p, li { color: var(--text); margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin: 0.75rem 0; overflow-x: auto; }
+  code { font-family: 'SF Mono', Consolas, monospace; font-size: 0.85rem; color: var(--green); }
+  .ic { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--accent); font-family: 'SF Mono', Consolas, monospace; }
+  ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+  th, td { padding: 0.6rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--card); color: var(--accent); }
+  td { background: var(--bg); }
+  .badge-demo { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .badge-prod { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: rgba(74,222,128,0.15); color: var(--green); }
+</style>
+</head>
+<body>
+
+<h1>💰 FinOps — Agent Cost Intelligence Developer Guide</h1>
+<p class="subtitle">FlowAMP · How real per-agent cost tracking works today, and what's still a production-hardening TODO</p>
+
+<div class="card">
+  <strong>Context:</strong> The FlowAMP dashboard has a FinOps tab showing total monthly spend, cost per invocation, utilization, projected overrun, a 30-day spend trend, a <em>Cost by Component</em> breakdown, and a per-agent cost table. This is <strong>no longer static seed data</strong> — spend is <span class="badge-prod">REAL</span>, pulled daily from <strong>AWS Cost Explorer</strong> by the <span class="ic">finops-collector</span> Lambda and written back as <span class="ic">COST#</span> ledger rows the UI reads. This guide documents how that pipeline actually works in the repo today, and flags the pieces that are still production-hardening TODOs (token-level model cost, forecast, anomaly detection).
+</div>
+
+<h2>How It Works Today (End to End)</h2>
+
+<div class="card">
+  <ol style="margin-left:1.25rem">
+    <li><strong>Tagging.</strong> The CDK stack applies the <span class="ic">flowamp:agentId</span> cost-allocation tag to every taggable resource. The stack-level value is <span class="ic">platform</span>; each AgentCore runtime is tagged with its specific agent id so Cost Explorer can attribute spend per agent.</li>
+    <li><strong>Tag activation.</strong> A CFN custom resource (<span class="ic">cost-tag-activator</span>) best-effort activates <span class="ic">flowamp:agentId</span> as a cost-allocation tag in Billing (management/payer account only).</li>
+    <li><strong>Daily collection.</strong> <span class="ic">finops-collector</span> runs daily at <strong>03:00 UTC</strong>, queries Cost Explorer <span class="ic">GetCostAndUsage</span> grouped by the <span class="ic">flowamp:agentId</span> tag, and writes one <span class="ic">COST#&lt;date&gt;</span> row per agent with <span class="ic">source: cost-explorer</span>.</li>
+    <li><strong>Read + render.</strong> The UI calls <span class="ic">GET /costs</span> → <span class="ic">data-handler.get_costs</span>, which scans the <span class="ic">COST#</span> rows for the last N days. <span class="ic">renderFinOps()</span> aggregates them into the total, trend chart, and Cost-by-Component panel, and shows a <strong>● Live · Cost Explorer</strong> badge.</li>
+  </ol>
+  <p><strong>No synthetic fallback:</strong> until the tag is activated and CE backfills (~24–48h), the collector writes nothing and the UI simply shows no live cost. Demo/seed cost is only ever present if you explicitly opt in with <span class="ic">-c seedSampleData=true</span> (labelled <em>◐ Demo data</em> in the UI).</p>
+</div>
+
+<h2>Data Model</h2>
+
+<p>FlowAMP uses a <strong>single DynamoDB table</strong> (<span class="ic">AgentTable</span>) with a composite key: partition key <span class="ic">agentId</span>, sort key <span class="ic">sk</span>. Cost is <strong>not</strong> a <span class="ic">monthlyCost</span> field on the agent's <span class="ic">INFO</span> row — it lives in its own ledger rows keyed <span class="ic">sk = "COST#&lt;YYYY-MM-DD&gt;"</span>. Each agent gets one COST# row per day.</p>
+
+<pre><code>// INFO row — the canonical agent record (no cost fields)
+{ "agentId": "managementAgentRuntime", "sk": "INFO", "status": "active", "runtimeArn": "arn:aws:bedrock-agentcore:..." }
+
+// COST#&lt;date&gt; row — one per agent per day, written by finops-collector
+{
+  "agentId":        "managementAgentRuntime",
+  "sk":             "COST#2026-07-05",
+  "date":           "2026-07-05",
+  "status":         "final",
+  "source":         "cost-explorer",
+  "totalCost":      12.481200,               // UnblendedCost for the day (Decimal, 6dp)
+  "costByComponent": {
+    "modelInference": null,                  // NOT tracked yet — needs OTEL token cost
+    "agentCompute":   3.204100,              // Lambda + EC2 compute
+    "toolExecution":  1.010000,              // Step Functions + API Gateway
+    "storage":        0.442000               // S3 + DynamoDB
+  },
+  "invocationCount": 0,                      // NOT joined yet — no Athena/OTEL count
+  "tags": { "agentClass": "", "businessUnit": "", "costCenter": "" },
+  "recordedAt":     "2026-07-06T03:00:12Z",
+  "updatedAt":      "2026-07-06T03:00:12Z"
+}</code></pre>
+
+<h2>Dashboard Widgets → Real Data Source</h2>
+
+<div class="card">
+  <table>
+    <tr><th>Dashboard Widget</th><th>Status</th><th>How it's computed today</th></tr>
+    <tr><td>Total Monthly Spend</td><td><span class="badge-prod">REAL</span></td><td>Sum of <span class="ic">totalCost</span> across live <span class="ic">COST#</span> rows (Cost Explorer <span class="ic">UnblendedCost</span> grouped by <span class="ic">flowamp:agentId</span>).</td></tr>
+    <tr><td>Cost by Component</td><td><span class="badge-prod">REAL</span> (partial)</td><td>Aggregates <span class="ic">costByComponent</span> (agentCompute / toolExecution / storage) from live rows. <span class="ic">modelInference</span> renders as "not tracked".</td></tr>
+    <tr><td>30-Day Spend Trend</td><td><span class="badge-prod">REAL</span></td><td>Live rows grouped by <span class="ic">date</span>, summed per day, plotted client-side in <span class="ic">renderFinOps()</span>.</td></tr>
+    <tr><td>Cost per Invocation</td><td><span class="badge-demo">TODO</span></td><td>Needs an invocation count. <span class="ic">invocationCount</span> is written as 0 — no Athena/OTEL count join in this repo. Averages read '—' until real metrics exist.</td></tr>
+    <tr><td>Utilization</td><td><span class="badge-demo">TODO</span></td><td>Requires AgentCore Runtime metrics (active vs. provisioned compute). Not collected yet.</td></tr>
+    <tr><td>Projected Overrun</td><td><span class="badge-demo">TODO</span></td><td>UI uses a simple <span class="ic">total × 1.03</span> heuristic vs. a hard-coded budget. Cost Explorer <span class="ic">get_cost_forecast()</span> is <em>not</em> wired.</td></tr>
+    <tr><td>Model Inference cost</td><td><span class="badge-demo">TODO</span></td><td>Per-model token cost needs OTEL token ingestion this repo doesn't have; <span class="ic">modelInference</span> stays <span class="ic">null</span>.</td></tr>
+    <tr><td>Cost Anomalies</td><td><span class="badge-demo">TODO</span></td><td>AWS Cost Anomaly Detection is not wired. The collector only calls <span class="ic">ce:GetCostAndUsage</span>.</td></tr>
+    <tr><td>Chargeback by Business Unit</td><td><span class="badge-demo">TODO</span></td><td>The <span class="ic">tags</span> map (agentClass / businessUnit / costCenter) is written on each COST# row, but those fields are currently empty and no dedicated chargeback grouping is rendered.</td></tr>
+  </table>
+</div>
+
+<h2>The Cost-Allocation Tag: <code>flowamp:agentId</code></h2>
+
+<div class="card">
+  <p>Cost Explorer can only group by a tag once that tag key is <strong>activated</strong> in Billing. FlowAMP uses the tag key <span class="ic">flowamp:agentId</span> (defined once in <span class="ic">team-stack.ts</span> as <span class="ic">COST_TAG_KEY</span>).</p>
+
+  <pre><code>// team-stack.ts — one tag key, applied stack-wide
+const COST_TAG_KEY = "flowamp:agentId";
+
+// Stack-level default: every taggable resource gets flowamp:agentId=platform.
+// Applied regardless of the enableCostExplorer flag so tag history accrues early.
+cdk.Tags.of(this).add(COST_TAG_KEY, "platform");
+
+// Per-runtime override: tags applied deeper in the construct tree win, so each
+// AgentCore runtime gets its specific agent id (this is what CE groups by).
+cdk.Tags.of(managementRuntime).add(COST_TAG_KEY, "managementAgentRuntime");
+cdk.Tags.of(discoveryScanner).add(COST_TAG_KEY, "flowampDiscoveryScanner");
+cdk.Tags.of(complianceScanner).add(COST_TAG_KEY, "flowampComplianceScanner");</code></pre>
+
+  <h3>Activating the tag (one-time)</h3>
+  <p>Activation is a Billing / payer-account operation. The <span class="ic">cost-tag-activator</span> CFN custom resource attempts it automatically on deploy:</p>
+  <pre><code># cost-tag-activator/index.py — best-effort activation
+ce = boto3.client("ce", region_name="us-east-1")   # CE is ALWAYS us-east-1
+ce.update_cost_allocation_tags_status(
+    CostAllocationTagsStatus=[{"TagKey": "flowamp:agentId", "Status": "Active"}]
+)</code></pre>
+  <ul>
+    <li>This only succeeds from the <strong>organization management (payer) account</strong>. In a member/linked/sandbox account the call is <span class="ic">AccessDenied</span> — expected. The custom resource <strong>never fails the stack</strong>; it logs that the tag must be activated manually in the Billing console and returns SUCCESS.</li>
+    <li>Two AWS-side delays even on success: the tag key must first <em>appear</em> in Billing (up to ~24h after the first tagged resource is created), and CE then needs up to another ~24h before it returns data grouped by it — roughly <strong>24–48h</strong> before real spend shows up.</li>
+  </ul>
+</div>
+
+<h2>The Collector: <code>finops-collector/index.py</code></h2>
+
+<div class="card">
+  <p>Runs daily on an EventBridge schedule (gated by the <span class="ic">enableCostExplorer</span> flag, which defaults to <strong>ON</strong>). For the <strong>previous UTC day</strong> it:</p>
+  <ol style="margin-left:1.25rem">
+    <li>Enumerates active agents that have a runtime ARN (skips placeholder registrations so it doesn't write $0 noise) — a single-table Scan filtered to <span class="ic">sk = "INFO"</span>.</li>
+    <li>Runs <strong>four</strong> Cost Explorer queries in parallel — one account-wide total plus three per-service-group component queries — all grouped by the <span class="ic">flowamp:agentId</span> tag.</li>
+    <li>Writes one <span class="ic">COST#&lt;date&gt;</span> row per agent with <span class="ic">source: 'cost-explorer'</span>. It's idempotent: an existing <span class="ic">final</span> row for the day is left as-is.</li>
+  </ol>
+
+  <h3>The four CE queries and their service groups</h3>
+  <pre><code># Service groups → the UI's costByComponent sub-keys.
+# modelInference stays null: real per-model token cost needs OTEL ingestion.
+_COMPONENTS = {
+    "agentCompute":  ["AWS Lambda", "Amazon Elastic Compute Cloud - Compute"],
+    "toolExecution": ["AWS Step Functions", "Amazon API Gateway"],
+    "storage":       ["Amazon Simple Storage Service", "Amazon DynamoDB"],
+}
+
+def _ce_query(target_date, services):
+    """One CE GetCostAndUsage grouped by flowamp:agentId. services=None → total."""
+    end = (date(target_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+    ce = boto3.client("ce", region_name="us-east-1")     # CE is always us-east-1
+    tag_filter = {"Tags": {"Key": "flowamp:agentId"}}
+    cost_filter = tag_filter if services is None else {
+        "And": [tag_filter, {"Dimensions": {"Key": "SERVICE", "Values": services}}]
+    }
+    resp = ce.get_cost_and_usage(
+        TimePeriod={"Start": target_date, "End": end},
+        Granularity="DAILY",
+        Metrics=["UnblendedCost"],
+        Filter=cost_filter,
+        GroupBy=[{"Type": "TAG", "Key": "flowamp:agentId"}],
+    )
+    # Group keys come back as 'flowamp:agentId$&lt;value&gt;' — split on '$'.
+    # ... paginate on NextPageToken; sum UnblendedCost per agent id ...</code></pre>
+
+  <h3>Error handling (per AWS docs)</h3>
+  <ul>
+    <li>The CE endpoint is <strong>always us-east-1</strong> regardless of the stack region.</li>
+    <li><span class="ic">DataUnavailableException</span> / empty result = the normal "not ready yet" case (tag not activated, or no spend) → the collector writes nothing and returns a reason.</li>
+    <li><span class="ic">LimitExceededException</span> = throttling → re-raised so EventBridge retries.</li>
+  </ul>
+</div>
+
+<h2>CDK: FinOps Collector Wiring</h2>
+
+<div class="card">
+  <p>From <span class="ic">team-stack.ts</span>, inside <span class="ic">if (enableCostExplorer)</span> (default ON; disable with <span class="ic">-c enableCostExplorer=false</span>):</p>
+  <pre><code>const enableCostExplorer = this.node.tryGetContext("enableCostExplorer") !== "false"; // default ON
+const COST_TAG_KEY = "flowamp:agentId";
+
+if (enableCostExplorer) {
+  const finopsCollectorFn = new lambda.Function(this, "FinopsCollectorFn", {
+    runtime: lambda.Runtime.PYTHON_3_12,
+    handler: "index.handler",
+    code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "finops-collector")),
+    environment: { AGENT_TABLE_NAME: agentTable.tableName, COST_TAG_KEY },
+    timeout: cdk.Duration.seconds(120),
+  });
+  agentTable.grantReadWriteData(finopsCollectorFn);
+
+  // Cost Explorer is account-wide; ce:* actions do not support resource scoping.
+  finopsCollectorFn.addToRolePolicy(new iam.PolicyStatement({
+    actions: ["ce:GetCostAndUsage"],
+    resources: ["*"],
+  }));
+
+  // Run daily at 03:00 UTC — a few hours after CE finalizes the prior UTC day.
+  new events.Rule(this, "FinopsCollectorSchedule", {
+    schedule: events.Schedule.cron({ minute: "0", hour: "3" }),
+    description: "Collect real per-agent spend from Cost Explorer (flowamp:agentId tag)",
+  }).addTarget(new targets.LambdaFunction(finopsCollectorFn));
+
+  // Best-effort activation of the cost-allocation tag (management account only).
+  const costTagActivatorFn = new lambda.Function(this, "CostTagActivatorFn", {
+    runtime: lambda.Runtime.PYTHON_3_12,
+    handler: "index.handler",
+    code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "cost-tag-activator")),
+    environment: { COST_TAG_KEY },
+    timeout: cdk.Duration.seconds(60),
+  });
+  // Cost Explorer is account-wide; ce:* actions do not support resource scoping.
+  costTagActivatorFn.addToRolePolicy(new iam.PolicyStatement({
+    actions: ["ce:UpdateCostAllocationTagsStatus", "ce:ListCostAllocationTags"],
+    resources: ["*"],
+  }));
+  const costTagProvider = new cr.Provider(this, "CostTagActivatorProvider", {
+    onEventHandler: costTagActivatorFn,
+  });
+  new cdk.CustomResource(this, "CostTagActivation", { serviceToken: costTagProvider.serviceToken });
+}</code></pre>
+  <p style="color:var(--muted);font-size:0.9rem">Note the minimal IAM: the collector is granted only <span class="ic">ce:GetCostAndUsage</span> (not forecast or anomaly actions), and the activator only <span class="ic">ce:UpdateCostAllocationTagsStatus</span> / <span class="ic">ce:ListCostAllocationTags</span>. Broadening these is part of wiring the TODO widgets below.</p>
+</div>
+
+<h2>How the UI Reads Cost</h2>
+
+<div class="card">
+  <p>The UI calls <span class="ic">GET /costs?days=30</span> → <span class="ic">data-handler.get_costs()</span>, which scans the ledger rows:</p>
+  <pre><code>def get_costs(days=30):
+    """Raw COST# ledger rows for the last N days (sk='COST#&lt;YYYY-MM-DD&gt;')."""
+    cutoff = (date.today() - timedelta(days=days - 1)).strftime('%Y-%m-%d')
+    # begins_with('COST#') keeps this off INFO/EVENT rows; the gte floor bounds the window.
+    flt = Attr('sk').begins_with('COST#') & Attr('sk').gte('COST#' + cutoff)
+    # ... paginate the scan, return the raw rows ...</code></pre>
+
+  <p>In <span class="ic">agent-management.html</span>, <span class="ic">renderFinOps()</span> consumes those rows (<span class="ic">liveCostRows</span>):</p>
+  <ul>
+    <li><strong>Source badge:</strong> if any row has <span class="ic">source === 'cost-explorer'</span> → <strong>● Live · Cost Explorer</strong>; else if <span class="ic">demo-seed</span> → <strong>◐ Demo data</strong>; else hidden.</li>
+    <li><strong>Total spend:</strong> sum of <span class="ic">totalCost</span> across live rows (real AWS spend), not the inline <span class="ic">finopsData</span> array (which is empty by default — no synthetic fallback).</li>
+    <li><strong>Cost by Component:</strong> aggregates <span class="ic">costByComponent</span>; <span class="ic">modelInference</span> renders as <em>"not tracked"</em> when null rather than a fake number.</li>
+    <li><strong>Trend chart:</strong> live rows grouped by <span class="ic">date</span>, summed per day.</li>
+  </ul>
+</div>
+
+<h2>Still To Harden for Production</h2>
+
+<div class="card" style="border-color: var(--yellow);">
+  <p>These are genuine TODOs — not yet implemented in the repo:</p>
+  <table>
+    <tr><th>Gap</th><th>What it needs</th></tr>
+    <tr><td><strong>Model inference / token cost</strong></td><td>OTEL token counts per invocation (from AgentCore Observability spans) × per-model pricing. Would populate <span class="ic">costByComponent.modelInference</span>. This is typically the <em>dominant</em> cost for AI agents.</td></tr>
+    <tr><td><strong>Invocation count &amp; cost-per-invocation</strong></td><td>An Athena or OTEL invocation-count join. Today <span class="ic">invocationCount</span> is 0, so cost-per-invocation and utilization averages show '—'.</td></tr>
+    <tr><td><strong>Projected overrun / forecast</strong></td><td>Wire <span class="ic">ce.get_cost_forecast()</span> and grant <span class="ic">ce:GetCostForecast</span>. Currently a <span class="ic">total × 1.03</span> heuristic against a hard-coded budget.</td></tr>
+    <tr><td><strong>Cost anomalies</strong></td><td>AWS Cost Anomaly Detection (<span class="ic">ce.get_anomalies()</span> + <span class="ic">ce:GetAnomalies</span>). Not wired.</td></tr>
+    <tr><td><strong>Chargeback by business unit</strong></td><td>Populate the <span class="ic">agentClass / businessUnit / costCenter</span> fields on agent records (they're written to COST# rows but empty), then group/render chargeback.</td></tr>
+    <tr><td><strong>Optimization recommendations</strong></td><td>Once invocation count + utilization exist, flag low-utilization/high-cost and idle agents.</td></tr>
+  </table>
+</div>
+
+<h2>Why Agent FinOps Is Different</h2>
+
+<div class="card" style="border-color: var(--accent);">
+  <strong>💡 Key Insight:</strong> FinOps for AI agents differs from traditional cloud FinOps because the dominant cost is <em>model tokens</em>, not compute. A single invocation that generates a long response can cost more than the runtime hosting it. FlowAMP tracks the compute/tooling/storage components <em>today</em> via Cost Explorer service grouping, but the token component (<span class="ic">modelInference</span>) is deliberately left <span class="ic">null</span> until OTEL token ingestion is added — the honest signal for chargeback. The tagging strategy is the foundation: without the <span class="ic">flowamp:agentId</span> cost-allocation tag on every resource (and activated in Billing), Cost Explorer can't attribute spend per agent. The model FlowAMP agents run on is <span class="ic">us.anthropic.claude-sonnet-4-6</span>.
+</div>
+
+<div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;">
+  <p>FlowAMP · FinOps Developer Guide · Reflects the current implementation (real Cost Explorer FinOps) as of July 2026</p>
+  <p>Sources: <span class="ic">assetsSrc/lambda/finops-collector/index.py</span> · <span class="ic">assetsSrc/lambda/cost-tag-activator/index.py</span> · <span class="ic">assetsSrc/lambda/data-handler/index.py</span> (<span class="ic">get_costs</span>) · <span class="ic">cdk/lib/team-stack.ts</span> (<span class="ic">enableCostExplorer</span>, <span class="ic">flowamp:agentId</span>, 03:00 UTC schedule) · <span class="ic">assetsSrc/site/agent-management.html</span> (<span class="ic">renderFinOps</span>)</p>
+</div>
+
+</body>
+</html>

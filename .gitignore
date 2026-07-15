@@ -1,0 +1,22 @@
+# Node / CDK
+node_modules/
+cdk/cdk.out/
+cdk.out/
+*.tsbuildinfo
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Holmes content-security-review scanner cache
+.holmes/
+
+# Security-review artifacts — INTERNAL only (rebuttals, restricted notes).
+# Must NOT be published to aws-samples.
+.security-review/
+
+# License assessment / BOM — INTERNAL Distribution Review artifact only.
+# Cites Amazon-internal tools and processes; must NOT be published to aws-samples.
+# Keep locally to submit to the review; never commit to the public repo.
+docs/bom/

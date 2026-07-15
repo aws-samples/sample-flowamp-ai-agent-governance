@@ -1,0 +1,23 @@
+# Vendored into the direct-code bundle for linux/arm64 + cp312 by
+# cdk/lib/agent-bundle.ts (uv pip install --python-platform aarch64-manylinux2014).
+# bedrock-agentcore IS required — main.py imports BedrockAgentCoreApp. It resolves
+# to 0.1.0 via uv's arm64 solve (leave it unpinned).
+# Unpinned (was ==0.1.0, a stale early pin). Modern Strands (1.x) is required for
+# AgentCore Evaluations: it has native OTEL instrumentation, and the OpenInference
+# instrumentor below (which translates Strands spans into GenAI semantic conventions
+# the evaluator reads) imports strands.telemetry.StrandsTelemetry, absent in 0.1.0.
+strands-agents
+strands-agents-tools
+bedrock-agentcore
+# boto3 must be recent: 1.35.0 predates AgentCore and its botocore has NO
+# bedrock-agentcore-control service model, so the scanner can't enumerate
+# runtimes ("service not available"). Unpin so uv resolves a version that
+# includes bedrock-agentcore-control + bedrock-agentcore.
+boto3>=1.40.0
+# ADOT SDK — emit OpenTelemetry spans to aws/spans (Transaction Search) so
+# AgentCore Observability + Evaluations have traces/sessions to read.
+aws-opentelemetry-distro>=0.10.1
+# OpenInference Strands span processor — transforms Strands' native OTEL spans into the
+# GenAI semantic-convention format AgentCore Evaluations expects. Initialized in main.py
+# via StrandsTelemetry().tracer_provider.add_span_processor(...) before the agent runs.
+openinference-instrumentation-strands-agents

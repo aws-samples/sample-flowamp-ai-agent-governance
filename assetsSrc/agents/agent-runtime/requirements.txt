@@ -1,0 +1,12 @@
+# Unpinned (was ==0.1.0). Modern Strands (1.x) is required for AgentCore
+# Observability/Evaluations: it has native OTEL instrumentation that emits agent
+# and tool spans. 0.1.0 has no strands.telemetry and produces no spans.
+strands-agents
+strands-agents-tools
+# Unpinned (was ==1.35.0). Modern Strands needs a recent botocore; 1.35.0 is
+# stale. Let uv resolve a compatible version.
+boto3>=1.40.0
+# ADOT SDK — lets the agent emit OpenTelemetry spans to aws/spans (Transaction
+# Search), which AgentCore Observability + Evaluations read. Without it the agent
+# only writes application logs and produces no traces/sessions to evaluate.
+aws-opentelemetry-distro>=0.10.1
