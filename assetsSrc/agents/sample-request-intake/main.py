@@ -1,24 +1,24 @@
-"""Sample workload: Healthcare Patient-Intake Assistant.
+"""Sample workload: Service Request Intake Assistant.
 
 A standalone Strands agent deployed on Amazon Bedrock AgentCore Runtime. It
-structures free-text patient intake notes, assigns a triage urgency level, and
-routes the encounter to an appropriate department.
+structures free-text service requests, assigns a priority level, and routes each
+request to an appropriate handling team.
 
-IMPORTANT: This agent performs intake structuring and routing ONLY. It does NOT
-provide medical diagnosis, treatment advice, or clinical decisions. All triage
-output is administrative and must be confirmed by a licensed clinician.
+IMPORTANT: This agent performs request structuring and routing ONLY. It does NOT
+make final decisions; all routing output is a suggestion and should be confirmed
+by the responsible team.
 
 This is an independent sample agent (not part of the FlowAMP control plane) so
 that the FlowAMP governance platform can discover, classify, and govern it as a
 real deployed workload. All data returned by the tools below is synthetic and
-illustrative; a customer swaps in real EHR and clinical-triage integrations.
+illustrative; a customer swaps in real ticketing / service-management
+integrations.
 
 RESPONSIBLE USE: This is an illustrative sample for demonstration only, not a
-production decision-making system. Its output is administrative intake
-structuring and must not be used as medical advice, diagnosis, or clinical
-triage. Production deployments in this regulated domain should attach an Amazon
-Bedrock Guardrail (set guardrailId/guardrailVersion on the BedrockModel) and keep
-a licensed clinician in the loop for all clinical decisions.
+production decision-making system. Its output is administrative request
+structuring and routing. Production deployments should attach an Amazon Bedrock
+Guardrail (set guardrailId/guardrailVersion on the BedrockModel) and keep a human
+reviewer in the loop for consequential decisions.
 """
 # ---------------------------------------------------------------------------
 # OTEL bootstrap — must run before any other import (boto3, strands, etc.).
@@ -74,111 +74,116 @@ from strands import Agent, tool
 from strands.models.bedrock import BedrockModel
 
 
-# Illustrative symptom lexicon and department mapping. A production deployment
-# would use a validated clinical NLP model and a hospital's department registry.
-_SYMPTOM_LEXICON = {
-    'chest pain': 'cardiac', 'shortness of breath': 'respiratory',
-    'difficulty breathing': 'respiratory', 'fever': 'infection',
-    'headache': 'neuro', 'dizziness': 'neuro', 'numbness': 'neuro',
-    'abdominal pain': 'gastro', 'nausea': 'gastro', 'vomiting': 'gastro',
-    'rash': 'derm', 'cough': 'respiratory', 'fatigue': 'general',
-    'bleeding': 'trauma', 'fracture': 'trauma', 'swelling': 'general',
-    'sore throat': 'general', 'back pain': 'ortho', 'joint pain': 'ortho',
+# Illustrative keyword lexicon and team mapping. A production deployment would
+# use a validated classifier and the organization's real team/queue registry.
+_TOPIC_LEXICON = {
+    'network': 'network', 'connectivity': 'network', 'vpn': 'network',
+    'outage': 'network', 'latency': 'network',
+    'login': 'access', 'password': 'access', 'access denied': 'access',
+    'permission': 'access', 'account locked': 'access',
+    'database': 'database', 'query': 'database', 'timeout': 'database',
+    'security': 'security', 'breach': 'security', 'phishing': 'security',
+    'vulnerability': 'security', 'malware': 'security',
+    'billing': 'billing', 'invoice': 'billing', 'charge': 'billing',
+    'refund': 'billing', 'payment': 'billing',
+    'bug': 'application', 'error': 'application', 'crash': 'application',
+    'feature request': 'application', 'slow': 'application',
 }
-# Symptoms that indicate a possible emergency and warrant immediate routing.
-_RED_FLAGS = ('chest pain', 'shortness of breath', 'difficulty breathing',
-              'bleeding', 'numbness', 'confusion', 'unconscious', 'seizure')
-_DEPARTMENT_LABELS = {
-    'cardiac': 'Cardiology', 'respiratory': 'Pulmonology', 'infection': 'Internal Medicine',
-    'neuro': 'Neurology', 'gastro': 'Gastroenterology', 'derm': 'Dermatology',
-    'trauma': 'Emergency Department', 'ortho': 'Orthopedics', 'general': 'General Medicine',
+# Keywords that indicate a possible critical incident and warrant immediate routing.
+_RED_FLAGS = ('outage', 'breach', 'malware', 'data loss', 'security',
+              'down', 'unavailable', 'production incident')
+_TEAM_LABELS = {
+    'network': 'Network Operations', 'access': 'Identity & Access',
+    'database': 'Database Team', 'security': 'Security Operations',
+    'billing': 'Billing & Accounts', 'application': 'Application Support',
+    'general': 'General Support',
 }
 
 
 @tool
-def extract_symptoms(intake_notes: str) -> str:
-    """Extract a structured list of symptoms from free-text intake notes.
+def extract_details(request_text: str) -> str:
+    """Extract structured topics from a free-text service request.
 
     Args:
-        intake_notes: The free-text notes captured at patient intake.
+        request_text: The free-text service request submitted by the requester.
     """
-    lowered = (intake_notes or '').lower()
+    lowered = (request_text or '').lower()
     found = []
-    for phrase, category in _SYMPTOM_LEXICON.items():
+    for phrase, category in _TOPIC_LEXICON.items():
         if phrase in lowered:
-            found.append({'symptom': phrase, 'category': category})
+            found.append({'topic': phrase, 'category': category})
 
-    # Best-effort age/duration capture for downstream context.
-    age_match = re.search(r'(\d{1,3})\s*(?:yo|y/o|years old|year old)', lowered)
+    # Best-effort duration/impact capture for downstream context.
     duration_match = re.search(r'(\d+)\s*(hour|day|week|month)s?', lowered)
+    affected_match = re.search(r'(\d{1,6})\s*(?:users?|customers?|systems?)', lowered)
 
     return json.dumps({
-        'symptoms': found,
-        'symptomCount': len(found),
-        'reportedAge': int(age_match.group(1)) if age_match else None,
+        'topics': found,
+        'topicCount': len(found),
+        'reportedImpactedCount': int(affected_match.group(1)) if affected_match else None,
         'reportedDuration': (duration_match.group(0) if duration_match else None),
-        'note': 'Extraction is administrative only; not a clinical assessment.',
+        'note': 'Extraction is administrative only; not a resolution decision.',
     }, default=str)
 
 
 @tool
-def check_urgency(symptom_list: str) -> str:
-    """Assign an administrative triage urgency level for a set of symptoms.
+def check_priority(topic_list: str) -> str:
+    """Assign an administrative priority level for a set of request topics.
 
     Args:
-        symptom_list: A comma-separated or free-text list of symptoms.
+        topic_list: A comma-separated or free-text list of request topics.
     """
-    lowered = (symptom_list or '').lower()
+    lowered = (topic_list or '').lower()
     red_flags = [flag for flag in _RED_FLAGS if flag in lowered]
-    distinct = [phrase for phrase in _SYMPTOM_LEXICON if phrase in lowered]
+    distinct = [phrase for phrase in _TOPIC_LEXICON if phrase in lowered]
 
     if red_flags:
-        level = 'emergent'
+        level = 'P1'
         target_minutes = 15
     elif len(distinct) >= 3:
-        level = 'urgent'
+        level = 'P2'
         target_minutes = 60
     elif distinct:
-        level = 'semi-urgent'
+        level = 'P3'
         target_minutes = 240
     else:
-        level = 'non-urgent'
+        level = 'P4'
         target_minutes = 1440
 
     return json.dumps({
-        'triageLevel': level,
-        'redFlagSymptoms': red_flags,
-        'targetTimeToClinicianMinutes': target_minutes,
-        'requiresImmediateClinicianReview': bool(red_flags),
-        'disclaimer': 'Administrative triage only. A licensed clinician must confirm.',
+        'priorityLevel': level,
+        'flaggedKeywords': red_flags,
+        'targetTimeToResponseMinutes': target_minutes,
+        'requiresImmediateReview': bool(red_flags),
+        'disclaimer': 'Administrative prioritization only. The handling team must confirm.',
     }, default=str)
 
 
 @tool
-def suggest_department(symptom_summary: str) -> str:
-    """Suggest a routing department based on a symptom summary.
+def suggest_team(request_summary: str) -> str:
+    """Suggest a routing team based on a request summary.
 
     Args:
-        symptom_summary: A short summary of the patient's symptoms.
+        request_summary: A short summary of the service request.
     """
-    lowered = (symptom_summary or '').lower()
+    lowered = (request_summary or '').lower()
     scores = {}
-    for phrase, category in _SYMPTOM_LEXICON.items():
+    for phrase, category in _TOPIC_LEXICON.items():
         if phrase in lowered:
             scores[category] = scores.get(category, 0) + 1
 
     if any(flag in lowered for flag in _RED_FLAGS):
-        category = 'trauma'
+        category = 'security'
     elif scores:
         category = max(scores, key=scores.get)
     else:
         category = 'general'
 
     return json.dumps({
-        'recommendedDepartment': _DEPARTMENT_LABELS.get(category, 'General Medicine'),
-        'departmentCode': category,
-        'alternates': [_DEPARTMENT_LABELS[c] for c in scores if c != category],
-        'disclaimer': 'Routing suggestion only; not a diagnosis. Clinician confirms placement.',
+        'recommendedTeam': _TEAM_LABELS.get(category, 'General Support'),
+        'teamCode': category,
+        'alternates': [_TEAM_LABELS[c] for c in scores if c != category],
+        'disclaimer': 'Routing suggestion only. The handling team confirms ownership.',
     }, default=str)
 
 
@@ -186,20 +191,20 @@ model = BedrockModel(model_id="us.anthropic.claude-sonnet-4-6")
 
 agent = Agent(
     model=model,
-    tools=[extract_symptoms, check_urgency, suggest_department],
-    system_prompt="""You are a healthcare patient-intake assistant.
-Your job is strictly administrative: you structure free-text intake notes into
-a list of symptoms, assign a triage urgency level, and route the patient to an
-appropriate department.
-You do NOT provide medical diagnosis, treatment recommendations, or clinical
-advice of any kind. Always state that your output is administrative triage and
-routing only, and that a licensed clinician must review and confirm.
-Always use the available tools to structure the intake before responding, and
-escalate any red-flag symptoms for immediate clinician review.
+    tools=[extract_details, check_priority, suggest_team],
+    system_prompt="""You are a service request intake assistant.
+Your job is strictly administrative: you structure free-text service requests
+into a list of topics, assign a priority level, and route each request to an
+appropriate handling team.
+You do NOT make final resolution decisions. Always state that your output is
+administrative structuring and routing only, and that the responsible team must
+review and confirm.
+Always use the available tools to structure the request before responding, and
+escalate any critical-incident keywords for immediate review.
 
 IMPORTANT: This is an illustrative sample for demonstration only. Output is
-administrative intake structuring — NOT medical advice, diagnosis, or triage. A
-licensed clinician must review and make all clinical decisions.""",
+administrative request structuring and routing — NOT a final decision. A human
+reviewer must confirm consequential actions.""",
 )
 
 

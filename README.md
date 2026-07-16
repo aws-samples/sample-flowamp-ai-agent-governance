@@ -25,7 +25,7 @@ through a Cognito-authorized API Gateway.
 | **AgentCore: management agent** | Strands agent that answers questions over the table. **Core - always deployed.** |
 | **AgentCore: `discovery-scanner`** | Governance agent that enumerates AND LLM-classifies the account's AgentCore runtimes, writing enriched catalog rows. **Owns single-account native discovery. Core - always deployed.** |
 | **AgentCore: `compliance-scanner`** | Governance agent that runs a deterministic compliance-checks framework (baseline / NIST AI RMF / ISO 27001 / SOC 2 / NERC-CIP) plus LLM judgment, writing `AUDIT#` / `RAI#` rows. **Core - always deployed.** |
-| **AgentCore: 3 sample agents** | Optional real customer-use-case Strands agents (insurance claims triage, supply-chain analyst, patient intake) that give discovery genuine agents to find. `deploySampleAgents=true`. |
+| **AgentCore: 3 sample agents** | Optional real customer-use-case Strands agents (insurance claims triage, supply-chain analyst, service request intake) that give discovery genuine agents to find. `deploySampleAgents=true`. |
 | **Bedrock Agent** | Foundation model via an inference profile (`us.anthropic.claude-sonnet-4-6`); action group defined by `assetsSrc/lambda/agent-handler/openapi.json`. |
 | **Lambda `agent-handler`** | Bedrock Agent action-group backend; serves the OpenAPI endpoints. |
 | **Lambda `discovery-handler`** | External connectors (Microsoft/Okta/MuleSoft - simulated) + real cross-account **org discovery**. Runs every 6h and on API routes. Async fire-and-forget for multi-account scans. |
@@ -243,7 +243,7 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
 │   │   ├── agent-runtime/             # Management agent
 │   │   ├── discovery-scanner/         # Governance: discover + classify agents
 │   │   ├── compliance-scanner/        # Governance: deterministic checks + RAI grading
-│   │   ├── sample-{claims-triage,supply-chain,patient-intake}/  # Sample workloads
+│   │   ├── sample-{claims-triage,supply-chain,request-intake}/  # Sample workloads
 │   │   └── _shared/                   # flowamp_tools + flowamp_compliance_checks (vendored at synth)
 │   └── site/                     # The static UI served via CloudFront
 ├── docs/developer-guides/        # Standalone HTML deep-dives per subsystem (NOT deployed)

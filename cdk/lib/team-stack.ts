@@ -37,7 +37,7 @@ import { assembleAgentBundle } from "./agent-bundle";
  *
  * Context flags (all default OFF):
  *   - `deploySampleAgents=true` deploys the 3 optional sample workload agents
- *     (claims-triage, supply-chain, patient-intake) as real discoverable AgentCore runtimes.
+ *     (claims-triage, supply-chain, request-intake) as real discoverable AgentCore runtimes.
  *   - `seedSampleData=true`   loads the demo agent catalog + simulated external connectors.
  *   - `enableCostExplorer` (default ON) deploys the real Cost Explorer FinOps collector;
  *     turn off with `-c enableCostExplorer=false`.
@@ -405,7 +405,7 @@ Use the available tools to fetch real data before responding.`,
     // The management agent + the two governance agents (discovery-scanner,
     // compliance-scanner) are CORE platform functionality and deploy ALWAYS.
     // The 3 standalone SAMPLE workload agents (claims-triage, supply-chain,
-    // patient-intake) are optional demo content, gated behind deploySampleAgents
+    // request-intake) are optional demo content, gated behind deploySampleAgents
     // (default off). All agents are real AgentCore runtimes (no mock constructs).
     {
       // Imported lazily so the alpha agentcore module is only loaded when used.
@@ -835,10 +835,10 @@ Use the available tools to fetch real data before responding.`,
           description: "Sample agent: supply-chain disruption analyst",
         },
         {
-          id: "SamplePatientIntakeRuntime",
-          runtimeName: "samplePatientIntake",
-          dir: "sample-patient-intake",
-          description: "Sample agent: healthcare patient-intake assistant",
+          id: "SampleRequestIntakeRuntime",
+          runtimeName: "sampleRequestIntake",
+          dir: "sample-request-intake",
+          description: "Sample agent: service request intake assistant",
         },
       ];
       const sampleArns: string[] = [];

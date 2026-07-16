@@ -6,7 +6,7 @@ import { assembleAgentBundle } from "./agent-bundle";
 
 /**
  * SampleAgentsStack — deploys ONLY the three standalone sample AgentCore agents
- * (insurance claims triage, supply-chain analyst, patient intake). No FlowAMP
+ * (insurance claims triage, supply-chain analyst, service request intake). No FlowAMP
  * platform: no DynamoDB, API Gateway, Cognito, UI, or governance agents.
  *
  * Use this to stand up just the sample workload agents in a separate account for
@@ -61,18 +61,18 @@ export class SampleAgentsStack extends cdk.Stack {
     // They are NOT production decision-makers. Each agent carries an in-prompt
     // responsible-use disclaimer instructing the model to behave as a
     // non-authoritative assistant (preliminary/administrative suggestions only).
-    // Two of these operate in regulated domains (insurance claims triage,
-    // healthcare patient intake); their outputs are not coverage/claims decisions
-    // or medical advice. A production deployment should attach an Amazon Bedrock
-    // Guardrail (set guardrailId/guardrailVersion on the BedrockModel in each
-    // agent) and keep a qualified human in the loop for all final decisions.
+    // One of these operates in a regulated domain (insurance claims triage); its
+    // outputs are not coverage/claims decisions. A production deployment should
+    // attach an Amazon Bedrock Guardrail (set guardrailId/guardrailVersion on the
+    // BedrockModel in each agent) and keep a qualified human in the loop for all
+    // final decisions.
     const sampleAgents = [
       { id: "SampleClaimsTriageRuntime", runtimeName: "sampleClaimsTriage", dir: "sample-claims-triage",
         description: "Sample agent: insurance claims triage assistant" },
       { id: "SampleSupplyChainRuntime", runtimeName: "sampleSupplyChain", dir: "sample-supply-chain",
         description: "Sample agent: supply-chain disruption analyst" },
-      { id: "SamplePatientIntakeRuntime", runtimeName: "samplePatientIntake", dir: "sample-patient-intake",
-        description: "Sample agent: healthcare patient-intake assistant" },
+      { id: "SampleRequestIntakeRuntime", runtimeName: "sampleRequestIntake", dir: "sample-request-intake",
+        description: "Sample agent: service request intake assistant" },
     ];
 
     const arns: string[] = [];
