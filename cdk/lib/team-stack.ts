@@ -1494,7 +1494,18 @@ Use the available tools to fetch real data before responding.`,
     // ─── S3 + CloudFront (created before the API so CORS can scope to the CloudFront origin) ───
     const siteBucket = new s3.Bucket(this, "DemoSiteBucket", {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
+      // Deliberately NOT autoDeleteObjects. That helper empties the bucket ONCE and
+      // then deletes itself, which cannot work for a bucket that is its own
+      // server-access-log target: the sweep's own DELETE calls generate log entries
+      // that S3 delivers afterwards (best-effort, minutes to hours), so the bucket is
+      // non-empty again by the time CloudFormation gets to it.
+      //
+      // Measured on a real teardown, 2026-08-04: the auto-delete resource completed at
+      // 15:20:54, the first late access-log object landed at 15:21:02 (8s later), the
+      // bucket delete failed at 15:23:38 with "bucket not empty", and logs were STILL
+      // arriving 24 minutes after that. 26 objects, every one under access-logs/.
+      //
+      // SiteBucketDrain below sweeps until two consecutive passes come back clean.
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       // Deny non-TLS requests via the bucket policy (cdk-nag AwsSolutions-S10 /
       // Checkov CKV_AWS_18). CloudFront already redirects viewers to HTTPS; this
@@ -1507,25 +1518,119 @@ Use the available tools to fetch real data before responding.`,
         {
           // Expire access logs after 7 days.
           //
-          // This is also a teardown backstop. A server-access-log target keeps
-          // receiving writes while it is being emptied — and because this bucket logs
-          // to ITSELF, the autoDeleteObjects sweep's own DELETE calls generate log
-          // entries that S3 may deliver (delivery is best-effort, minutes to hours)
-          // after the one-shot cleaner has already removed itself. The bucket is then
-          // non-empty when CloudFormation tries to delete it, which fails the whole
-          // teardown. Expiry bounds how much can accumulate if that happens and an
-          // abandoned bucket is left behind.
-          //
-          // If a destroy does fail on this bucket, the unblock is
-          // `aws s3 rm s3://<bucket> --recursive` then re-run the delete. Note that
-          // forcing delete ORDER via DependsOn is not an option: the bucket is its own
-          // log target, so any such edge is a self-reference.
+          // Also a backstop: if a teardown is abandoned entirely, this keeps an
+          // orphaned bucket from growing without bound. It cannot fix the delete race
+          // itself — expiry is measured in days, teardown in seconds — which is what
+          // SiteBucketDrain is for. Note that forcing delete ORDER via DependsOn is not
+          // an option either: the bucket is its own log target, so any such edge is a
+          // self-reference.
           id: "expire-access-logs",
           prefix: "access-logs/",
           expiration: cdk.Duration.days(7),
         },
       ],
     });
+
+    // ─── Site bucket drain (replaces autoDeleteObjects) ───
+    // On stack DELETE, empty the bucket repeatedly until TWO consecutive passes find
+    // nothing. Requiring two clean passes in a row means waiting out at least one quiet
+    // interval rather than stopping in a lull between S3 access-log deliveries, which is
+    // what a single pass does. Bounded by the Lambda's own remaining time, holding back
+    // a reserve so there is always room to answer CloudFormation.
+    //
+    // On CREATE and UPDATE this does nothing at all.
+    const siteDrainFn = new lambda.Function(this, "SiteBucketDrainFn", {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "index.handler",
+      // Late deliveries were still arriving ~24 min after the sweep in the observed
+      // failure, so give this room rather than the default 3s.
+      timeout: cdk.Duration.minutes(14),
+      code: lambda.Code.fromInline(
+        [
+          "import json, time, urllib.request",
+          "import boto3",
+          "",
+          "def _respond(event, context, status, reason=None):",
+          "    body = json.dumps({",
+          "        'Status': status,",
+          "        'Reason': reason or ('See CloudWatch log stream: ' + context.log_stream_name),",
+          "        'PhysicalResourceId': event.get('PhysicalResourceId') or 'site-bucket-drain',",
+          "        'StackId': event['StackId'],",
+          "        'RequestId': event['RequestId'],",
+          "        'LogicalResourceId': event['LogicalResourceId'],",
+          "        'Data': {},",
+          "    }).encode('utf-8')",
+          "    req = urllib.request.Request(event['ResponseURL'], data=body, method='PUT')",
+          "    req.add_header('content-type', '')",
+          "    req.add_header('content-length', str(len(body)))",
+          "    urllib.request.urlopen(req, timeout=30)",
+          "",
+          "def _empty_once(s3, bucket):",
+          "    removed = 0",
+          "    # Delete versions AND delete-markers too: a versioned bucket is not empty",
+          "    # until both are gone, and S3 rejects the bucket delete otherwise.",
+          "    for api, key in (('list_object_versions', 'Versions'),",
+          "                     ('list_object_versions', 'DeleteMarkers'),",
+          "                     ('list_objects_v2', 'Contents')):",
+          "        try:",
+          "            paginator = s3.get_paginator(api)",
+          "            for page in paginator.paginate(Bucket=bucket):",
+          "                objs = [{'Key': o['Key'], **({'VersionId': o['VersionId']} if 'VersionId' in o else {})}",
+          "                        for o in page.get(key, [])]",
+          "                for i in range(0, len(objs), 1000):",
+          "                    s3.delete_objects(Bucket=bucket, Delete={'Objects': objs[i:i+1000]})",
+          "                removed += len(objs)",
+          "        except Exception as exc:",
+          "            print('sweep pass on %s via %s/%s: %s' % (bucket, api, key, exc))",
+          "    return removed",
+          "",
+          "def handler(event, context):",
+          "    try:",
+          "        if event['RequestType'] != 'Delete':",
+          "            _respond(event, context, 'SUCCESS', 'Nothing to do on ' + event['RequestType'])",
+          "            return",
+          "        bucket = event['ResourceProperties']['BucketName']",
+          "        s3 = boto3.client('s3')",
+          "        pause, reserve_ms, clean, attempt = 15, 45000, 0, 0",
+          "        while context.get_remaining_time_in_millis() > reserve_ms + pause * 1000:",
+          "            attempt += 1",
+          "            removed = _empty_once(s3, bucket)",
+          "            clean = clean + 1 if removed == 0 else 0",
+          "            print('sweep %d removed %d (clean streak %d)' % (attempt, removed, clean))",
+          "            if clean >= 2:",
+          "                _respond(event, context, 'SUCCESS', 'Drained after %d pass(es)' % attempt)",
+          "                return",
+          "            time.sleep(pause)",
+          "        # Out of time. Report SUCCESS anyway: failing here would leave the stack",
+          "        # in DELETE_FAILED, which is worse than a bucket the 7-day lifecycle rule",
+          "        # will empty. CloudFormation will surface the bucket delete failure itself.",
+          "        _respond(event, context, 'SUCCESS', 'Stopped on time budget after %d pass(es)' % attempt)",
+          "    except Exception as exc:",
+          "        print('drain failed: %s' % exc)",
+          "        _respond(event, context, 'SUCCESS', 'Drain error (non-fatal): %s' % exc)",
+        ].join("\n")
+      ),
+    });
+    siteBucket.grantRead(siteDrainFn);
+    siteDrainFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "s3:ListBucket",
+          "s3:ListBucketVersions",
+          "s3:DeleteObject",
+          "s3:DeleteObjectVersion",
+        ],
+        resources: [siteBucket.bucketArn, `${siteBucket.bucketArn}/*`],
+      })
+    );
+    const siteDrain = new cdk.CustomResource(this, "SiteBucketDrain", {
+      serviceToken: siteDrainFn.functionArn,
+      properties: { BucketName: siteBucket.bucketName },
+    });
+    // The drain must run BEFORE the bucket is deleted. CloudFormation deletes in
+    // reverse dependency order, so having the drain depend on the bucket is what puts
+    // the drain first on the way down.
+    siteDrain.node.addDependency(siteBucket);
 
     const distribution = new cloudfront.Distribution(this, "DemoDistribution", {
       defaultBehavior: {
