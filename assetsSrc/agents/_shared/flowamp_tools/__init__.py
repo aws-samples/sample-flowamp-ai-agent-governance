@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """flowamp_tools — shared Strands @tool package for all FlowAMP agents.
 
 Exports are loaded lazily on first attribute access (PEP 562) so that

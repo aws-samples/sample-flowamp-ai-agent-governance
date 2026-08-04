@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Framework templates for the five built-in compliance frameworks.
 
 Each template matches the INFO row schema in DES-11 §ComplianceFrameworkTable schema.

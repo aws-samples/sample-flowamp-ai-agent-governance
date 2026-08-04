@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """lifecycle.py — writes lifecycle_change events to the shared table.
 
 Called on every agent (or AOP) state transition. Single-table port: rows are

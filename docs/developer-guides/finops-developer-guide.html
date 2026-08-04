@@ -52,11 +52,11 @@
 <p>FlowAMP uses a <strong>single DynamoDB table</strong> (<span class="ic">AgentTable</span>) with a composite key: partition key <span class="ic">agentId</span>, sort key <span class="ic">sk</span>. Cost is <strong>not</strong> a <span class="ic">monthlyCost</span> field on the agent's <span class="ic">INFO</span> row — it lives in its own ledger rows keyed <span class="ic">sk = "COST#&lt;YYYY-MM-DD&gt;"</span>. Each agent gets one COST# row per day.</p>
 
 <pre><code>// INFO row — the canonical agent record (no cost fields)
-{ "agentId": "managementAgentRuntime", "sk": "INFO", "status": "active", "runtimeArn": "arn:aws:bedrock-agentcore:..." }
+{ "agentId": "flowamp_management_agent", "sk": "INFO", "status": "active", "runtimeArn": "arn:aws:bedrock-agentcore:..." }
 
 // COST#&lt;date&gt; row — one per agent per day, written by finops-collector
 {
-  "agentId":        "managementAgentRuntime",
+  "agentId":        "flowamp_management_agent",
   "sk":             "COST#2026-07-05",
   "date":           "2026-07-05",
   "status":         "final",
@@ -103,9 +103,11 @@ const COST_TAG_KEY = "flowamp:agentId";
 // Applied regardless of the enableCostExplorer flag so tag history accrues early.
 cdk.Tags.of(this).add(COST_TAG_KEY, "platform");
 
-// Per-runtime override: tags applied deeper in the construct tree win, so each
-// AgentCore runtime gets its specific agent id (this is what CE groups by).
-cdk.Tags.of(managementRuntime).add(COST_TAG_KEY, "managementAgentRuntime");
+// Per-agent override: tags applied deeper in the construct tree win, so each
+// agent gets its specific agent id (this is what CE groups by). The management
+// agent is a HARNESS, tagged via its CfnHarness `tags` property plus the
+// stack-level Tags aspect; the scanners are runtimes.
+cdk.Tags.of(harness).add(COST_TAG_KEY, "flowamp-management-agent");
 cdk.Tags.of(discoveryScanner).add(COST_TAG_KEY, "flowampDiscoveryScanner");
 cdk.Tags.of(complianceScanner).add(COST_TAG_KEY, "flowampComplianceScanner");</code></pre>
 

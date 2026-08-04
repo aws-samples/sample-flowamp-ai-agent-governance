@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Shared agent catalog query helper.
 
 The AgentTable has no GSI, so we Scan with a ``FilterExpression`` of

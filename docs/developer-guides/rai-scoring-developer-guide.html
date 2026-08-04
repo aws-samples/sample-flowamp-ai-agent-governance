@@ -87,7 +87,7 @@
   </div>
 
   <h3>What the scorer does today <span class="badge badge-demo">REAL, BASE UNTIL SIGNALS</span></h3>
-  <p>Reads the CloudWatch metric <span class="inline-code">AWS/Bedrock → GuardrailInterventions</span> with dimension <span class="inline-code">AgentId</span>, and the agent's own <span class="inline-code">requests</span>/<span class="inline-code">errors</span> fields from its DynamoDB INFO row. It starts from a base of <strong>95</strong> and penalizes for the intervention rate and error rate. In a fresh account the guardrail metric returns <span class="inline-code">0</span> and <span class="inline-code">requests</span> defaults to 1, so the score sits at <strong>95</strong>.</p>
+  <p>Reads the CloudWatch metric <span class="inline-code">AWS/Bedrock/Guardrails → InvocationsIntervened</span>, dimensioned by <span class="inline-code">GuardrailArn</span>, and the agent's own <span class="inline-code">requests</span>/<span class="inline-code">errors</span> fields from its DynamoDB INFO row. It starts from a base of <strong>95</strong> and penalizes for the intervention rate and error rate. In a fresh account the guardrail metric returns <span class="inline-code">0</span> and <span class="inline-code">requests</span> defaults to 1, so the score sits at <strong>95</strong>.</p>
 
   <h3>Actual code <span class="badge badge-prod">assetsSrc/lambda/rai-scorer/index.py</span></h3>
   <pre><code>def score_fairness(agent):
@@ -95,10 +95,11 @@
     errors = agent.get('errors', 0)
     error_rate = errors / max(invocations, 1)
 
-    # Bedrock Guardrail interventions (0 until a guardrail is attached + firing)
-    guardrail_interventions = get_metric(
-        'AWS/Bedrock', 'GuardrailInterventions',
-        [{'Name': 'AgentId', 'Value': agent['agentId']}])
+    # Bedrock Guardrail interventions (no datapoints until a guardrail is
+    # attached to the agent AND its ARN is on the record as guardrailArn)
+    guardrail_interventions = float(get_metric(
+        'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+        _guardrail_dims(agent)) or 0)
     intervention_rate = guardrail_interventions / max(invocations, 1)
 
     # Base 95, penalized by intervention rate and error rate
@@ -107,7 +108,7 @@
 
   <h3>Still to harden <span class="badge badge-prod">TODO</span></h3>
   <ul>
-    <li><strong>Attach a Bedrock Guardrail</strong> to each agent so <span class="inline-code">GuardrailInterventions</span> is actually emitted under <span class="inline-code">AWS/Bedrock</span>. Note the current dimension key is <span class="inline-code">AgentId</span> — verify the real metric dimension (Bedrock also emits under <span class="inline-code">GuardrailId</span>/<span class="inline-code">GuardrailVersion</span>) and align it.</li>
+    <li><strong>Attach a Bedrock Guardrail</strong> to each agent and record its ARN as <span class="inline-code">guardrailArn</span> on the agent record, so <span class="inline-code">InvocationsIntervened</span> can be read for it. An agent with no guardrail produces no datapoints, which the scorer treats as <em>no signal</em> (its existing score is preserved) rather than as a bad score.</li>
     <li><strong>Invocation-log sampling</strong> — enable Bedrock model invocation logging to S3, sample input/output pairs, and run a bias classifier for demographic disparity.</li>
     <li><strong>Human feedback loop</strong> — persist operator thumbs-up/down; disproportionate negative feedback on an input category is a fairness signal.</li>
   </ul>
@@ -199,20 +200,24 @@
   </div>
 
   <h3>What the scorer does today <span class="badge badge-demo">REAL, BASE UNTIL SIGNALS</span></h3>
-  <p>Reads two CloudWatch metrics under <span class="inline-code">AWS/Bedrock</span> with dimension <span class="inline-code">AgentId</span>: <span class="inline-code">GuardrailBlocked</span> and <span class="inline-code">GuardrailPiiRedacted</span>. It starts from a base of <strong>93</strong>, adds a small +3 bonus for active PII protection, and penalizes only when the block rate is very high (&gt; 5%). In a fresh account both metrics are <span class="inline-code">0</span>, the PII-protection flag is still set (because <span class="inline-code">guardrail_blocks &gt;= 0</span> is trivially true), and the score sits at <strong>96</strong>.</p>
+  <p>Reads the same <span class="inline-code">AWS/Bedrock/Guardrails</span> → <span class="inline-code">InvocationsIntervened</span> metric twice, narrowed by <span class="inline-code">GuardrailPolicyType</span>: <span class="inline-code">ContentPolicy</span> for harmful-content blocks and <span class="inline-code">SensitiveInformationPolicy</span> for PII redaction. It starts from a base of <strong>93</strong>, adds a small +3 bonus for active PII protection, and penalizes only when the block rate is very high (&gt; 5%). In a fresh account both metrics are <span class="inline-code">0</span>, the PII-protection flag is still set (because <span class="inline-code">guardrail_blocks &gt;= 0</span> is trivially true), and the score sits at <strong>96</strong>.</p>
 
   <h3>Actual code <span class="badge badge-prod">assetsSrc/lambda/rai-scorer/index.py</span></h3>
   <pre><code>def score_ethics(agent):
     invocations = agent.get('requests', 0) or 1
 
-    guardrail_blocks = get_metric(
-        'AWS/Bedrock', 'GuardrailBlocked',
-        [{'Name': 'AgentId', 'Value': agent['agentId']}])
+    # Same metric, narrowed by policy type: ContentPolicy = harmful content
+    guardrail_blocks = float(get_metric(
+        'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+        _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType',
+                                 'Value': 'ContentPolicy'}])) or 0)
     block_rate = guardrail_blocks / max(invocations, 1)
 
-    pii_redactions = get_metric(
-        'AWS/Bedrock', 'GuardrailPiiRedacted',
-        [{'Name': 'AgentId', 'Value': agent['agentId']}])
+    # SensitiveInformationPolicy = PII redaction
+    pii_redactions = float(get_metric(
+        'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+        _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType',
+                                 'Value': 'SensitiveInformationPolicy'}])) or 0)
     has_pii_protection = 1 if pii_redactions > 0 or guardrail_blocks >= 0 else 0
 
     # Base 93, +3 for PII protection, penalty only for a high block rate
@@ -223,7 +228,7 @@
   <ul>
     <li><strong>Configuration checks over runtime metrics</strong> — call <span class="inline-code">bedrock:GetAgent</span> to verify a guardrail is actually attached, and <span class="inline-code">bedrock:GetGuardrail</span> to confirm content, PII, and denied-topic policies are configured. Neither action is on the scorer role today. An agent with no guardrail should drop hard, not sit at 96.</li>
     <li><strong>Fix the trivially-true PII flag</strong> — <span class="inline-code">guardrail_blocks &gt;= 0</span> is always true, so the +3 bonus is unconditional. Gate it on real PII-redaction activity or on a verified guardrail policy.</li>
-    <li><strong>Verify the metric dimension</strong> — confirm <span class="inline-code">GuardrailBlocked</span>/<span class="inline-code">GuardrailPiiRedacted</span> are the real Bedrock metric names and that <span class="inline-code">AgentId</span> is the emitted dimension.</li>
+    <li><strong>Metric names (resolved).</strong> There is no <span class="inline-code">GuardrailBlocked</span> or <span class="inline-code">GuardrailPiiRedacted</span> metric, and no <span class="inline-code">AgentId</span> dimension — earlier versions of this scorer queried those and silently got nothing back. The real metric is <span class="inline-code">InvocationsIntervened</span> in <span class="inline-code">AWS/Bedrock/Guardrails</span>, dimensioned by <span class="inline-code">GuardrailArn</span>/<span class="inline-code">GuardrailVersion</span> with an optional <span class="inline-code">GuardrailPolicyType</span>: see the <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/monitoring-guardrails-cw-metrics.html">Guardrails CloudWatch metrics reference</a>.</li>
   </ul>
 </div>
 
@@ -366,7 +371,7 @@ raiApi.addResource("rai").addResource("score")
   <tbody>
     <tr>
       <td><strong>Fairness</strong></td>
-      <td>CW <span class="inline-code">AWS/Bedrock GuardrailInterventions</span> + DDB error rate</td>
+      <td>CW <span class="inline-code">AWS/Bedrock/Guardrails InvocationsIntervened</span> + DDB error rate</td>
       <td>95</td>
       <td>Attach guardrails; verify metric dimension; log sampling + feedback</td>
     </tr>
@@ -384,7 +389,7 @@ raiApi.addResource("rai").addResource("score")
     </tr>
     <tr>
       <td><strong>Ethics</strong></td>
-      <td>CW <span class="inline-code">GuardrailBlocked</span> + <span class="inline-code">GuardrailPiiRedacted</span></td>
+      <td>CW <span class="inline-code">InvocationsIntervened</span> by <span class="inline-code">GuardrailPolicyType</span> (Content / SensitiveInformation)</td>
       <td>96</td>
       <td>Guardrail-attached/policy config checks; fix trivially-true PII flag</td>
     </tr>

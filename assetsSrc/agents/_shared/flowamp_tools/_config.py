@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Shared config helpers for the single-table flowamp_tools.
 
 This deployment uses a single ``AgentTable`` keyed ``agentId`` (PK) + ``sk`` (SK),

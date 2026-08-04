@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """NIST AI Risk Management Framework template.
 
 Aligns to NIST AI RMF GOVERN/MAP/MEASURE/MANAGE.

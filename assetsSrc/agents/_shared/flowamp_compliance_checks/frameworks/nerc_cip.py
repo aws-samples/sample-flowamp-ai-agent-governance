@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """NERC CIP (Critical Infrastructure Protection) framework template.
 
 Focused on grid-operations AI agents. Data residency and VPC isolation are

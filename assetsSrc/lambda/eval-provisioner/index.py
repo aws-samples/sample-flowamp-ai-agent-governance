@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Eval provisioner — creates/enables/disables AgentCore online-evaluation configs.
 
 AgentCore online-evaluation configs CANNOT be created at CDK/deploy time: the control

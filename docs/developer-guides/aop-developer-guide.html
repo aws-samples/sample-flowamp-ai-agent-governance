@@ -220,7 +220,7 @@ enforcement engine would need — none of these AWS resources are created by Flo
   <p>Each AOP becomes an <strong>enforceable runtime contract</strong> composed of AWS primitives:</p>
   <ul>
     <li><strong>Trigger</strong> → EventBridge Rule (pattern match on IoT, CloudWatch Alarm, schedule, or API call)</li>
-    <li><strong>Decision</strong> → Bedrock Agent invocation with constrained prompt + Guardrails</li>
+    <li><strong>Decision</strong> → agent invocation with constrained prompt + Guardrails</li>
     <li><strong>Action</strong> → Lambda execution with scoped IAM role (least-privilege per AOP)</li>
     <li><strong>Guardrail</strong> → Bedrock Guardrail with AOP-specific content/topic/PII filters</li>
     <li><strong>Escalation</strong> → SNS → PagerDuty / human-in-the-loop approval via Step Functions</li>
@@ -316,7 +316,7 @@ Detection) to show the extra fields an enforcement engine would need.</p>
     </div>
     <div class="flow-connector"></div>
     <div class="flow-node decision">
-      <div class="flow-label decision">③ DECISION — Bedrock Agent</div>
+      <div class="flow-label decision">③ DECISION — agent invocation</div>
       Network Anomaly Detector agent analyzes traffic pattern. Uses action group tools: <span class="ic">query_traffic_baseline</span>, <span class="ic">compare_known_signatures</span>, <span class="ic">assess_threat_level</span>. Returns confidence score + severity.
     </div>
     <div class="flow-connector"></div>
@@ -358,7 +358,7 @@ const aopEngine = new sfn.StateMachine(this, 'AOPEngine', {
       .when(sfn.Condition.stringEquals('$.validation.Payload.status', 'blocked'),
         new sfn.Fail(this, 'AOPBlocked', { cause: 'AOP inactive or budget exceeded' }))
       .otherwise(
-        // Step 3: Invoke Bedrock Agent
+        // Step 3: Invoke the agent
         new tasks.LambdaInvoke(this, 'InvokeAgent', {
           lambdaFunction: agentHandlerFn,
           resultPath: '$.agentResult',

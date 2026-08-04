@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Work-item tools — no-op stubs for the single-table deployment.
 
 Work items are the unit of AOP-runtime dispatch: a WorkItemTable whose DynamoDB

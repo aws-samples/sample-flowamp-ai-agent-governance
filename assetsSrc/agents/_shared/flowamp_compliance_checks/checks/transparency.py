@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Transparency category cheap-tier checks.
 
 Checks:
@@ -226,9 +228,28 @@ class AopCoverage(Check):
 
 @_register
 class AgentTraceEnabled(Check):
+    """Verifies an agent's reasoning is observable.
+
+    What counts as observable depends on the execution surface:
+
+      - AgentCore harness / runtime: the agent runs inside AgentCore, which emits
+        spans and logs when observability is enabled. The check confirms a trace
+        destination actually exists for it, rather than assuming.
+      - Bedrock Agents Classic: `enableTrace` is a per-INVOCATION request parameter,
+        not alias configuration, so no control-plane call can prove tracing is on.
+        This is reported as an indeterminate result to be confirmed at the call site,
+        not as a pass.
+
+    An earlier version of this check treated "the alias has a routingConfiguration"
+    as a proxy for tracing and returned `pass`. Every prepared alias has a routing
+    configuration, so that passed agents with tracing entirely off. A check that
+    cannot distinguish the compliant case from the non-compliant one is worse than
+    no check, because it manufactures false assurance in an audit record.
+    """
+
     check_id = "agent-trace-enabled"
     category = "transparency"
-    description = "Bedrock Agent alias has enableTrace set so reasoning chains are visible."
+    description = "Agent reasoning is observable (AgentCore traces, or Classic enableTrace at invocation)."
     cost = "cheap"
     applies_to = ["agent"]
     default_severity = "medium"
@@ -238,32 +259,77 @@ class AgentTraceEnabled(Check):
         if not isinstance(target, AgentTarget):
             return CheckResult(result="skip", evidence="Check only applies to AgentTarget")
 
+        runtime = (target.record.get("runtime") or "").lower()
         runtime_arn = target.runtime_arn or target.record.get("runtimeArn", "")
-        if not runtime_arn or "agent" not in runtime_arn:
-            return CheckResult(result="skip", evidence="No Bedrock Agent ARN on target")
 
-        # ARN format: arn:aws:bedrock:{region}:{account}:agent/{agentId}
-        parts = runtime_arn.split("/")
-        agent_id = parts[-1] if len(parts) >= 2 else ""
-        if not agent_id:
-            return CheckResult(result="skip", evidence=f"Cannot parse agentId from ARN={runtime_arn}")
+        # ── AgentCore (harness or runtime) ──
+        if "agentcore" in runtime or ":bedrock-agentcore:" in runtime_arn:
+            runtime_id = (
+                target.record.get("runtimeId")
+                or target.record.get("platformAgentId")
+                or (runtime_arn.rsplit("/", 1)[-1] if runtime_arn else "")
+            )
+            if not runtime_id:
+                return CheckResult(
+                    result="skip",
+                    evidence="AgentCore agent with no runtime id on the record",
+                )
+            # AgentCore writes application logs and OTEL spans under this prefix, one
+            # log group per runtime id. Presence of the group is the observable
+            # signal available from the control plane.
+            prefix = f"/aws/bedrock-agentcore/runtimes/{runtime_id}"
+            try:
+                logs = ctx.client("logs")
+                groups = logs.describe_log_groups(
+                    logGroupNamePrefix=prefix, limit=5
+                ).get("logGroups", [])
+                if groups:
+                    names = ", ".join(g.get("logGroupName", "") for g in groups[:3])
+                    return CheckResult(
+                        result="pass",
+                        evidence=f"AgentCore trace/log destination present: {names}",
+                    )
+                return CheckResult(
+                    result="fail",
+                    evidence=(
+                        f"No log group under {prefix} — the agent has produced no "
+                        "traces or logs, so its reasoning is not observable. Set "
+                        "AGENT_OBSERVABILITY_ENABLED=true and invoke it once."
+                    ),
+                )
+            except Exception as exc:
+                return CheckResult(result="skip", evidence=f"{type(exc).__name__}: {exc}")
 
-        bedrock_agent = ctx.client("bedrock-agent")
-        try:
-            aliases = bedrock_agent.list_agent_aliases(agentId=agent_id).get("agentAliasSummaries", [])
-            if not aliases:
-                return CheckResult(result="skip", evidence="No aliases found for agent")
-            # Check the first active alias
-            alias_id = aliases[0]["agentAliasId"]
-            alias = bedrock_agent.get_agent_alias(agentId=agent_id, agentAliasId=alias_id)
-            trace_enabled = alias.get("agentAlias", {}).get("clientToken") is not None
-            # enableTrace is set at invocation time, not alias config — check routing config presence as proxy
-            routing = alias.get("agentAlias", {}).get("routingConfiguration", [])
-            if routing:
-                return CheckResult(result="pass", evidence=f"Agent alias {alias_id} has routing config; verify enableTrace=true at invocation sites")
-            return CheckResult(result="fail", evidence=f"Alias {alias_id} has no routing configuration")
-        except Exception as exc:
-            return CheckResult(result="skip", evidence=f"{type(exc).__name__}: {exc}")
+        # ── Bedrock Agents Classic ──
+        if "bedrock agent" in runtime or ":bedrock:" in runtime_arn:
+            # enableTrace travels on InvokeAgent, so the control plane cannot answer
+            # this. Confirm the agent exists, then report indeterminate rather than
+            # inventing a proxy signal.
+            agent_id = runtime_arn.rsplit("/", 1)[-1] if runtime_arn else ""
+            if not agent_id:
+                return CheckResult(
+                    result="skip", evidence="Classic agent with no parseable agent id"
+                )
+            try:
+                bedrock_agent = ctx.client("bedrock-agent")
+                aliases = bedrock_agent.list_agent_aliases(agentId=agent_id).get(
+                    "agentAliasSummaries", []
+                )
+            except Exception as exc:
+                return CheckResult(result="skip", evidence=f"{type(exc).__name__}: {exc}")
+            return CheckResult(
+                result="skip",
+                evidence=(
+                    f"Bedrock Agents Classic agent {agent_id} ({len(aliases)} alias(es)). "
+                    "enableTrace is a per-invocation parameter and cannot be verified "
+                    "from the control plane — confirm it at the InvokeAgent call sites."
+                ),
+            )
+
+        return CheckResult(
+            result="skip",
+            evidence=f"Unrecognized execution surface (runtime={runtime or 'unset'})",
+        )
 
 
 @_register

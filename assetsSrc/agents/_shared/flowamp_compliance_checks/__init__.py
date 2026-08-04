@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """flowamp_compliance_checks — shared check registry for RAI Scorer and Compliance Auditor.
 
 Usage:

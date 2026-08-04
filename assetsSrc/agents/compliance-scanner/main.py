@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Compliance Auditor — Strands agent that evaluates agents against compliance frameworks daily.
 
 This agent runs one-shot: it is invoked directly (rotation path with no explicit
@@ -176,7 +178,7 @@ def _query_agent(agent_id: str) -> dict | None:
 def _pick_rotation_target() -> Optional[str]:
     """Return the agentId of the auditable-platform agent with the oldest lastAuditedAt.
 
-    Selection algorithm (per plan §4 Slice B and DES-11):
+    Selection algorithm:
     1. Load auditable platform IDs from AgentTable FLOWAMP_PLATFORMS partition.
     2. Load all agent INFO rows; filter for eligible + on-auditable-platform.
     3. Emit a single warning event listing eligible agents that have no platformId
@@ -184,29 +186,49 @@ def _pick_rotation_target() -> Optional[str]:
     4. Sort eligible agents by lastAuditedAt ascending; absent/null sorts as ''
        so never-audited agents always win over any agent with a real timestamp.
     5. Return the head agentId, or None if the candidate set is empty.
+
+    Absent platform configuration means "audit everything eligible", NOT "audit
+    nothing". Nothing in the platform writes the FLOWAMP_PLATFORMS sentinel rows —
+    they are an operator-managed allowlist — so on a fresh deploy the auditable set
+    is empty. Treating that as "no candidates" made every rotation run (the daily
+    schedule and the fleet Re-audit button) a silent no-op that still reported
+    success. Failing open is right here because the audit is READ-ONLY: it grades
+    agents and writes AUDIT#/RAI# rows, so over-auditing is harmless while
+    under-auditing hides governance gaps, which is the opposite of the point.
     """
     auditable_platform_ids = list_auditable_platforms()
 
     all_agents = _list_all_agents()
-    eligible = [
-        a for a in all_agents
-        if _eligible_for_audit(a) and a.get("platformId") in auditable_platform_ids
-    ]
+    eligible = [a for a in all_agents if _eligible_for_audit(a)]
 
-    # Warn about agents that are eligible by status but have no platformId.
-    unlinked = [
-        a.get("agentId", "") for a in all_agents
-        if _eligible_for_audit(a) and not a.get("platformId")
-    ]
-    if unlinked:
-        log_agent_decision(
-            action_type="compliance_audit_skip",
-            input_summary="Agents eligible by status but unlinked from any platform",
-            output_summary=f"Orphan agent IDs: {unlinked}",
-            evaluation_result="warning",
+    if auditable_platform_ids:
+        eligible = [a for a in eligible if a.get("platformId") in auditable_platform_ids]
+    else:
+        logger.warning(
+            "No auditable platforms configured (FLOWAMP_PLATFORMS sentinel absent or "
+            "no rows flagged auditable=true); auditing all %d eligible agent(s). "
+            "Add the sentinel rows to restrict the rotation to specific platforms.",
+            len(eligible),
         )
 
+    # Warn about agents that are eligible by status but have no platformId. Only
+    # meaningful when a platform allowlist exists — without one, platformId is
+    # not used for selection at all.
+    if auditable_platform_ids:
+        unlinked = [
+            a.get("agentId", "") for a in all_agents
+            if _eligible_for_audit(a) and not a.get("platformId")
+        ]
+        if unlinked:
+            log_agent_decision(
+                action_type="compliance_audit_skip",
+                input_summary="Agents eligible by status but unlinked from any platform",
+                output_summary=f"Orphan agent IDs: {unlinked}",
+                evaluation_result="warning",
+            )
+
     if not eligible:
+        logger.warning("Rotation found no eligible agents to audit")
         return None
 
     # Sort by lastAuditedAt ascending; treat absent/null as "" so never-audited

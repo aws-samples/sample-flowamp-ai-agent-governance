@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Compliance-scan invoker — bridges the UI "Run compliance audit" button and the
 daily EventBridge schedule to the AgentCore compliance-scanner runtime.
 
@@ -37,12 +39,17 @@ def _resp(status, body):
     return {"statusCode": status, "headers": CORS_HEADERS, "body": json.dumps(body)}
 
 
-def _run_audit(agent_id: str) -> None:
+def _run_audit(agent_id: str) -> str:
     """The long call — invoke the compliance-scanner and let it finish. Runs in the
     async self-invocation, so the multi-minute duration never touches API Gateway.
 
     Passes agentId when auditing a specific agent; an empty payload tells the scanner
     to rotation-pick the eligible agent with the oldest lastAuditedAt.
+
+    Returns the scanner's response body as text so the caller can tell an audit that
+    actually graded an agent from one that selected nothing. A rotation run that
+    finds no target is not an error, but it must not be reported as a completed
+    audit either — that reads as a clean run and hides the misconfiguration.
     """
     client = boto3.client("bedrock-agentcore", region_name=_region)
     session_id = "ui-compliance-" + uuid.uuid4().hex + uuid.uuid4().hex  # >= 33 chars
@@ -53,7 +60,21 @@ def _run_audit(agent_id: str) -> None:
         payload=json.dumps(payload),
     )
     # Drain the response so the runtime completes its work before we return.
-    resp["response"].read()
+    raw = resp["response"].read()
+    try:
+        return raw.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# Markers the scanner emits when a rotation run selected no agent. Matched
+# case-insensitively against the response body.
+_NO_TARGET_MARKERS = ("no eligible agents", "no agent selected", "no rotation target")
+
+
+def _audited_nothing(body: str) -> bool:
+    low = (body or "").lower()
+    return any(m in low for m in _NO_TARGET_MARKERS)
 
 
 def handler(event, context):
@@ -63,9 +84,12 @@ def handler(event, context):
             print("compliance-scan-invoker: COMPLIANCE_SCANNER_ARN not set; nothing to do")
             return {"ok": False}
         try:
-            _run_audit(event.get("agentId", ""))
+            body = _run_audit(event.get("agentId", ""))
+            if _audited_nothing(body):
+                print("compliance-scan-invoker: audit selected NO agent — nothing graded")
+                return {"ok": True, "audited": False}
             print("compliance-scan-invoker: audit completed")
-            return {"ok": True}
+            return {"ok": True, "audited": True}
         except Exception as exc:  # noqa: BLE001
             print(f"compliance-scan-invoker: audit failed: {exc}")
             return {"ok": False, "error": str(exc)}
@@ -73,9 +97,13 @@ def handler(event, context):
     # EventBridge scheduled invocation → rotation audit (no specific agent).
     if isinstance(event, dict) and event.get("source") == "aws.events":
         try:
-            _run_audit("")  # rotation: scanner picks the oldest-audited eligible agent
+            body = _run_audit("")  # rotation: scanner picks the oldest-audited eligible agent
+            if _audited_nothing(body):
+                print("compliance-scan-invoker: scheduled rotation selected NO agent — "
+                      "nothing graded (check that eligible agents exist)")
+                return {"ok": True, "audited": False}
             print("compliance-scan-invoker: scheduled rotation audit completed")
-            return {"ok": True}
+            return {"ok": True, "audited": True}
         except Exception as exc:  # noqa: BLE001
             print(f"compliance-scan-invoker: scheduled audit failed: {exc}")
             return {"ok": False, "error": str(exc)}

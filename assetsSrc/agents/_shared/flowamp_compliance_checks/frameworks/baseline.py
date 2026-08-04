@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """FlowAMP Baseline framework template.
 
 The FLOWAMP_BASELINE framework is the customer-editable organisational baseline

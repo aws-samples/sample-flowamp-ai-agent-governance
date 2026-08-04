@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Discovery-scan invoker — bridges the UI "Discover agents" button to the
 AgentCore discovery-scanner runtime.
 

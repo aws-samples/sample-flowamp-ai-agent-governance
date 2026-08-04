@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Framework definition access — code-defined frameworks.
 
 Compliance framework definitions are **code-defined** in the

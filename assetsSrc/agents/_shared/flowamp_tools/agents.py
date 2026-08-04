@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Shared tool for invoking other FlowAMP agents via AgentCore."""
 import json
 import os

@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """AuditLogger — emit structured JSON audit entries via the standard logger.
 
 Low-level transaction breadcrumbs (e.g. AOP condition-evaluation detail) are

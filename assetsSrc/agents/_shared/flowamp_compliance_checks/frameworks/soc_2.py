@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """SOC 2 framework template.
 
 SOC 2 Trust Service Criteria focus on security (CC6), availability (CC7),

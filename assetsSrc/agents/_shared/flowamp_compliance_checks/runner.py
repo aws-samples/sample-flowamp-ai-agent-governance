@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Single entry point for executing compliance checks.
 
 Used by both the RAI Scorer Lambda and the Compliance Auditor agent's

@@ -721,7 +721,7 @@
                         <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Description</label><textarea id="regDesc" class="search-bar" style="margin:0;height:60px;resize:vertical;font-family:inherit" placeholder="What does this agent do?"></textarea></div>
                         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
                             <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Model</label><select id="regModel" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>Claude Sonnet 4</option><option>Claude Haiku 3.5</option><option>Titan Text Premier</option><option>Custom / Fine-tuned</option></select></div>
-                            <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Runtime</label><select id="regRuntime" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>Bedrock Agent</option><option>AgentCore (Strands)</option><option>Lambda</option><option>External API</option></select></div>
+                            <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Runtime</label><select id="regRuntime" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>AgentCore Harness</option><option>AgentCore Runtime</option><option>Bedrock Agent Classic</option><option>Lambda</option><option>External API</option></select></div>
                             <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Compliance</label><select id="regCompliance" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>ISO 27001 Controlled</option><option>Standard</option><option>Public</option></select></div>
                         </div>
                         <button onclick="registerAgent()" style="background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s">Submit for Registration</button>
@@ -1798,6 +1798,12 @@ async function loadAgentAudit(name) {
 // Trigger a compliance audit for one agent (fire-and-forget). The scanner writes an
 // AUDIT# row in ~1-2 min; we poll loadAgentAudit a few times so the panel updates.
 async function runComplianceAudit(name) {
+    // The compliance-scanner is gated by deployGovernanceAgents; without it the
+    // /compliance/scan route does not exist.
+    if (window.COMPLIANCE_SCAN_ENABLED === false) {
+        showToast('Compliance auditing is not deployed (deployGovernanceAgents=false).');
+        return;
+    }
     const agentId = _agentIdForName(name);
     if (!agentId) { showToast('Cannot audit: agent not in the live registry.'); return; }
     const res = await apiPost('/compliance/scan', {agentId});
@@ -1894,6 +1900,12 @@ function renderComplianceFleet() {
 // Trigger a rotation audit (no agentId → scanner picks the oldest-audited agent),
 // then poll the fleet view a few times so the new grade lands.
 async function runFleetAudit() {
+    // The compliance-scanner is gated by deployGovernanceAgents; without it the
+    // /compliance/scan route does not exist.
+    if (window.COMPLIANCE_SCAN_ENABLED === false) {
+        showToast('Compliance auditing is not deployed (deployGovernanceAgents=false).');
+        return;
+    }
     const res = await apiPost('/compliance/scan', {});
     if (!res) { showToast('Failed to start rotation audit'); return; }
     showToast('Rotation audit started — the scanner is grading the oldest-audited agent. Refreshing shortly.');
@@ -1909,6 +1921,12 @@ async function runFleetAudit() {
 // the fleet so grades fill in as each scanner run finishes. The scanner audits one agent
 // per invoke, so this is how the whole fleet gets covered without waiting days of rotation.
 async function auditAllAgents(btn) {
+    // The compliance-scanner is gated by deployGovernanceAgents; without it the
+    // /compliance/scan route does not exist.
+    if (window.COMPLIANCE_SCAN_ENABLED === false) {
+        showToast('Compliance auditing is not deployed (deployGovernanceAgents=false).');
+        return;
+    }
     // Source the agent list from the registry, falling back to /agents if not loaded.
     let agents = (typeof registryData !== 'undefined' && registryData.length) ? registryData : [];
     if (!agents.length) {
@@ -3169,7 +3187,7 @@ async function loadRegistry() {
             category: a.category || '—',
             system: a.system || '—',
             status: a.status || 'active',
-            // Do NOT default to 'Bedrock Agent' — external-connector agents (Okta,
+            // Do NOT default to a native runtime label — external-connector agents (Okta,
             // MuleSoft, Copilot Studio) carry their own platform runtime, and a
             // real native agent sets it too. '—' when genuinely unknown.
             runtime: a.runtime || '—',
@@ -4730,7 +4748,38 @@ function renderMarkdown(src) {
     const lines = String(src).replace(/\r\n/g, '\n').split('\n');
     let html = '', listType = null, inCode = false, code = '';
     const closeList = () => { if (listType) { html += listType === 'ol' ? '</ol>' : '</ul>'; listType = null; } };
-    for (const line of lines) {
+
+    // GFM pipe tables. The harness answers registry questions with tables far more
+    // often than the old action-group agent did, and without this they fell through
+    // to the plain-text branch and rendered as literal rows of pipes.
+    const splitRow = (l) => l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+    const isDivider = (l) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l) && l.includes('-');
+    const TD = 'padding:5px 9px;border:1px solid #2e4058;text-align:left;vertical-align:top';
+    const renderTable = (rows) => {
+        const head = splitRow(rows[0]);
+        const body = rows.slice(2).map(splitRow);
+        let t = '<div style="overflow-x:auto;margin:8px 0"><table style="border-collapse:collapse;font-size:12px;width:100%">';
+        t += '<thead><tr>' + head.map(c => `<th style="${TD};background:#141e2c;font-weight:600">${inline(c)}</th>`).join('') + '</tr></thead><tbody>';
+        for (const r of body) {
+            // Pad or trim so a ragged row cannot break the column alignment.
+            const cells = head.map((_, i) => r[i] ?? '');
+            t += '<tr>' + cells.map(c => `<td style="${TD}">${inline(c)}</td>`).join('') + '</tr>';
+        }
+        return t + '</tbody></table></div>';
+    };
+
+    for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        // Table: a header row followed by a |---|---| divider.
+        if (!inCode && line.includes('|') && lines[li + 1] !== undefined && isDivider(lines[li + 1])) {
+            closeList();
+            const rows = [line, lines[li + 1]];
+            let j = li + 2;
+            while (j < lines.length && lines[j].includes('|') && lines[j].trim() !== '') { rows.push(lines[j]); j++; }
+            html += renderTable(rows);
+            li = j - 1;
+            continue;
+        }
         if (/^```/.test(line)) {
             if (inCode) { html += '<pre style="background:#141e2c;padding:10px 12px;border-radius:8px;overflow:auto;font-size:12px;margin:6px 0"><code>' + esc(code) + '</code></pre>'; code = ''; inCode = false; }
             else { closeList(); inCode = true; }
@@ -4740,7 +4789,28 @@ function renderMarkdown(src) {
         const h = line.match(/^(#{1,4})\s+(.*)$/);
         const ol = line.match(/^\s*\d+\.\s+(.*)$/);
         const ul = line.match(/^\s*[-*]\s+(.*)$/);
-        if (h) { closeList(); html += '<div style="font-weight:700;margin:8px 0 4px">' + inline(h[2]) + '</div>'; }
+        // Horizontal rule. Checked before headings so a '---' separator is not
+        // mistaken for setext underlining, and before the plain-text branch so it
+        // does not render as three literal dashes (the harness uses these as
+        // section separators).
+        // Three or more of the SAME delimiter. Written as explicit alternation rather
+        // than a capture-group backreference (/([-*_])\s*\1\s*\1/): Semgrep's JS parser
+        // fails on the backreference form, and a file whose script block will not parse
+        // is reported as one block-level finding at the <script> tag — which no
+        // line-level `nosemgrep` comment can suppress, because there is no line to
+        // attach it to. Behaviour is identical, including rejecting mixed runs like -_-.
+        if (/^\s*(?:-\s*-\s*-[-\s]*|\*\s*\*\s*\*[*\s]*|_\s*_\s*_[_\s]*)$/.test(line)) {
+            closeList();
+            html += '<hr style="border:none;border-top:1px solid #2e4058;margin:10px 0">';
+            continue;
+        }
+        // Scale heading weight/size by level so h1 and h4 are visually distinct.
+        if (h) {
+            closeList();
+            const lvl = h[1].length;
+            const size = [15, 14, 13, 13][lvl - 1];
+            html += `<div style="font-weight:700;font-size:${size}px;margin:${lvl <= 2 ? 10 : 8}px 0 4px">` + inline(h[2]) + '</div>';
+        }
         else if (ol) { if (listType !== 'ol') { closeList(); html += '<ol style="margin:4px 0 4px 20px;padding:0">'; listType = 'ol'; } html += '<li style="margin:2px 0">' + inline(ol[1]) + '</li>'; }
         else if (ul) { if (listType !== 'ul') { closeList(); html += '<ul style="margin:4px 0 4px 20px;padding:0">'; listType = 'ul'; } html += '<li style="margin:2px 0">' + inline(ul[1]) + '</li>'; }
         else if (line.trim() === '') { closeList(); }
@@ -4756,6 +4826,40 @@ function setChatMsg(div, role, text) {
     if (role === 'user') { div.style.whiteSpace = 'pre-wrap'; div.textContent = text; }
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     else { div.style.whiteSpace = 'normal'; div.innerHTML = renderMarkdown(text); }
+}
+
+// Render the per-chat trace the api-handler returns: which registry tools the agent
+// chose, and the real token counts. This is the tool-call audit trail the governance
+// story rests on — showing not just that the agent answered, but what it consulted
+// and what the turn cost. Appended under the reply rather than in a separate panel so
+// it stays tied to the message it describes.
+function appendChatTrace(div, trace) {
+    if (!trace) return;
+    const calls = Array.isArray(trace.toolCalls) ? trace.toolCalls : [];
+    const tokens = trace.tokens || {};
+    if (!calls.length && !tokens.total) return;
+    // Gateway prefixes tool names as "<target>___<tool>"; show just the tool.
+    const names = calls.map(t => esc(String(t).split('___').pop()));
+    const parts = [];
+    if (names.length) {
+        parts.push(`<span style="color:#7ee787">tools</span> ${names.join(', ')}`);
+    } else {
+        parts.push('<span style="color:#9aacbe">no tools called</span>');
+    }
+    if (tokens.total) {
+        parts.push(`<span style="color:#58a6ff">tokens</span> ${Number(tokens.total).toLocaleString()}`
+            + ` <span style="color:#8b95a1">(in ${Number(tokens.input || 0).toLocaleString()}`
+            + ` / out ${Number(tokens.output || 0).toLocaleString()})</span>`);
+    }
+    const foot = document.createElement('div');
+    foot.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid #2e4058;'
+        + 'font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#9aacbe;'
+        + 'line-height:1.7';
+    // Each part is wrapped so the separator survives; a flex gap would not apply to
+    // sibling spans inside one innerHTML assignment.
+    // nosemgrep: insecure-document-method - innerHTML sink; tool names are esc()-encoded, token counts are coerced with Number(), rest is static markup
+    foot.innerHTML = parts.map(p => `<span style="margin-right:14px">${p}</span>`).join('');
+    div.appendChild(foot);
 }
 
 function appendChatMsg(role, text) {
@@ -4789,6 +4893,7 @@ async function sendChat() {
         }
         const data = await res.json();
         setChatMsg(thinking, 'assistant', data.response || data.error || 'No response');
+        appendChatTrace(thinking, data.trace);
         if (data.sessionId) chatSessionId = data.sessionId;
     } catch (e) {
         thinking.textContent = '⚠️ Could not reach the API. Deploy the CDK stack first, then set window.CHAT_API_URL.\n\nError: ' + e.message;

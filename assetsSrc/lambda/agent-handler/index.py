@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 import json
 import os
 import boto3
@@ -46,10 +48,55 @@ def get_all_agents(platform=None):
 def scan_by_prefix(prefix):
     return [i for i in scan_info() if i['agentId'].startswith(prefix)]
 
-def handler(event, context):
+# Maps each MCP tool name to the internal route it serves. An AgentCore Gateway
+# identifies the tool by name in the Lambda *context*, not by an HTTP-ish path in the
+# event, so this is how a tool call resolves to a branch below.
+TOOL_ROUTES = {
+    'listAgents': '/agents',
+    'getAgent': '/agents/{agentId}',
+    'getAgentMetrics': '/agents/{agentId}/metrics',
+    'listCompliance': '/compliance',
+    'listAOPs': '/aops',
+    'listAccess': '/access',
+    'listPlatforms': '/platforms',
+    'getCrossPlatformSummary': '/agents/cross-platform-summary',
+}
+
+# The gateway prefixes the visible tool name with its target name, e.g.
+# "agent-management___listAgents" — THREE underscores (the CDK README says two).
+TOOL_NAME_DELIMITER = '___'
+
+
+def _resolve_request(event, context):
+    """Normalize an invocation into (route, params, is_gateway).
+
+    Two callers are supported:
+      - AgentCore Gateway (current): the tool name arrives on
+        context.client_context.custom['bedrockAgentCoreToolName'], and the event IS
+        the flat input-schema arguments.
+      - Bedrock Agents Classic action group (legacy): the route arrives as
+        event['apiPath'] with event['parameters'] as a list of {name, value} pairs.
+
+    The legacy branch is kept so the handler stays independently testable and so a
+    stack mid-migration cannot break the chat path.
+    """
+    custom = getattr(getattr(context, 'client_context', None), 'custom', None) or {}
+    raw_name = custom.get('bedrockAgentCoreToolName', '')
+    tool_name = raw_name.split(TOOL_NAME_DELIMITER)[-1] if raw_name else ''
+
+    if tool_name:
+        # The gateway passes the tool's arguments as the event itself.
+        params = {k: v for k, v in (event or {}).items() if v is not None}
+        return TOOL_ROUTES.get(tool_name, ''), params, True
+
     api_path = event.get('apiPath', '')
-    action = event.get('actionGroup', '')
     params = {p['name']: p['value'] for p in event.get('parameters', [])}
+    return api_path, params, False
+
+
+def handler(event, context):
+    api_path, params, is_gateway = _resolve_request(event, context)
+    action = event.get('actionGroup', '') if isinstance(event, dict) else ''
 
     if api_path == '/agents':
         items = _project(get_all_agents(params.get('platform')), _AGENT_FIELDS)
@@ -120,6 +167,12 @@ def handler(event, context):
         body = json.dumps(_project(scan_by_prefix('access:'), _ACCESS_FIELDS), cls=DecimalEncoder)
     else:
         body = json.dumps({'message': 'Unknown action'})
+
+    # A Gateway Lambda target returns its result DIRECTLY — the gateway wraps it as
+    # the MCP tool result. Only the legacy action-group caller needs the
+    # messageVersion/response envelope.
+    if is_gateway:
+        return json.loads(body)
 
     return {
         'messageVersion': '1.0',

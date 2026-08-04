@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """FinOps daily collector — writes REAL per-agent spend from AWS Cost Explorer.
 
 Writes per-agent daily spend into this repo's single AgentTable (Scan instead of a

@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Trace tool — record an agent's step-by-step decision reasoning.
 
 A decision trace is the drill-down detail behind a single agent_decision event.

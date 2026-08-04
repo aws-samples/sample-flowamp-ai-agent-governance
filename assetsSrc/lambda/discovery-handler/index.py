@@ -1,9 +1,12 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """
 Discovery Agent — discovers ALL agents, native and external, and upserts normalized records.
 
-Supports: native AWS (Amazon Bedrock Agents + AgentCore runtimes), Microsoft Copilot
-Studio, Okta Secure AI, MuleSoft Agent Fabric. Each connector returns a list of
-normalized dicts that map to the AgentRecord schema.
+Supports: native AWS (Bedrock AgentCore harnesses + runtimes, and legacy Bedrock
+Agents Classic where present), Microsoft Copilot Studio, Okta Secure AI, MuleSoft
+Agent Fabric. Each connector returns a list of normalized dicts that map to the
+AgentRecord schema.
 Runs on a schedule (EventBridge) or on-demand via API Gateway.
 
 Native-discovery ownership: the AgentCore `discovery-scanner` agent (deployed with
@@ -210,10 +213,11 @@ def discover_microsoft(config: dict) -> list:
             'platformAgentId': src['platformAgentId'],
             'category': src['category'],
             'system': 'Copilot Studio',
-            # External connector agents are NOT Bedrock/AgentCore — label the runtime
-            # with the platform's own runtime and mark the origin so the UI does not
-            # show them as "Bedrock Agent".
-            'runtime': 'Copilot Studio',
+            # External SaaS agents run on their vendor's own runtime; FlowAMP governs
+            # them through the platform's API rather than hosting them. `system`
+            # already names the platform, so `runtime` carries the execution surface
+            # — and the registry's "external" filter matches on 'External API'.
+            'runtime': 'External API',
             'source': 'external-connector',
             'status': src['status'],
             'requests': src['requests'],
@@ -252,7 +256,9 @@ def discover_okta(config: dict) -> list:
             'platformAgentId': src['platformAgentId'],
             'category': src['category'],
             'system': 'Okta Secure AI',
-            'runtime': 'Okta Secure AI',
+            # See the Copilot Studio connector: `system` names the platform, so
+            # `runtime` carries the execution surface the UI filters on.
+            'runtime': 'External API',
             'source': 'external-connector',
             'status': src['status'],
             'requests': src['requests'],
@@ -291,7 +297,9 @@ def discover_mulesoft(config: dict) -> list:
             'platformAgentId': src['platformAgentId'],
             'category': src['category'],
             'system': 'MuleSoft Agent Fabric',
-            'runtime': 'MuleSoft Agent Fabric',
+            # See the Copilot Studio connector: `system` names the platform, so
+            # `runtime` carries the execution surface the UI filters on.
+            'runtime': 'External API',
             'source': 'external-connector',
             'status': src['status'],
             'requests': src['requests'],
@@ -313,10 +321,16 @@ def discover_mulesoft(config: dict) -> list:
 
 def discover_native(config: dict) -> list:
     """
-    Discover agents running natively in this AWS account: Amazon Bedrock Agents
-    and (when present) Bedrock AgentCore runtimes. Unlike the external connectors,
-    this reads real AWS APIs — no simulation. Best-effort: a missing API or
-    permission for one source does not abort discovery of the others.
+    Discover agents running natively in this AWS account: AgentCore harnesses,
+    AgentCore runtimes, and any legacy Bedrock Agents Classic agents. Unlike the
+    external connectors, this reads real AWS APIs — no simulation. Best-effort: a
+    missing API or permission for one source does not abort discovery of the others.
+
+    Bedrock Agents Classic entered maintenance mode on 2026-07-30 (CreateAgent is
+    blocked for accounts without prior usage), but existing agents keep working and
+    the read APIs stay available to everyone. A customer's Classic fleet therefore
+    still has to be discoverable — this is a governance plane, so it reports what
+    exists rather than only what is current.
     """
     agents = []
 
@@ -339,6 +353,9 @@ def discover_native(config: dict) -> list:
                     'platformAgentId': agent_id,
                     'category': 'AWS Native',
                     'system': 'Amazon Bedrock Agents',
+                    # Execution surface, shown in the registry's Runtime column.
+                    # The connector must report it or the column renders empty.
+                    'runtime': 'Bedrock Agent Classic',
                     # Newly-discovered agents enter at 'pending-review' — a valid
                     # entry state in the data-handler lifecycle machine — so an
                     # operator can move them through the lifecycle in the UI.
@@ -356,13 +373,58 @@ def discover_native(config: dict) -> list:
     except Exception as e:
         logger.error(f"Native Bedrock Agents discovery failed: {e}")
 
-    # Bedrock AgentCore runtimes (only present when AgentCore is deployed)
+    # Bedrock AgentCore harnesses. A harness is the managed agent loop (model +
+    # prompt + tools declared as configuration) that AgentCore runs for you.
+    #
+    # Enumerated BEFORE runtimes because AgentCore implements a harness AS a
+    # runtime: the same logical agent is returned by both ListHarnesses and
+    # ListAgentRuntimes. We record each harness's backing runtime name here and
+    # skip it in the runtime pass below, or one agent registers twice under two
+    # different names.
+    harness_runtime_names = set()
+    try:
+        agentcore = boto3.client('bedrock-agentcore-control')
+        harnesses = agentcore.list_harnesses().get('harnesses', [])
+        for h in harnesses:
+            h_id = h.get('harnessId', h.get('harnessName', ''))
+            h_name = h.get('harnessName', h_id)
+            # AgentCore names the backing runtime `harness_<harnessName>`.
+            harness_runtime_names.add(f"harness_{h_name}")
+            agents.append({
+                'agentId': _clean_native_id(h_name, h_id),
+                'name': h_name,
+                'platform': 'native',
+                'platformAgentId': h_id,
+                'category': 'AWS Native',
+                'system': 'Amazon Bedrock AgentCore',
+                'runtime': 'AgentCore Harness',
+                'status': 'pending-review',
+                **demo_metrics(h_id),
+                'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
+                'owner': '',
+                'platformMetadata': {
+                    'source': 'bedrock-agentcore-harness',
+                    'status': h.get('status', ''),
+                    'updatedAt': str(h.get('updatedAt', '')),
+                },
+            })
+        logger.info(f"Native: found {len(harnesses)} AgentCore harness(es)")
+    except Exception as e:
+        # ListHarnesses needs a recent SDK and a region where harnesses are available.
+        logger.info(f"Native AgentCore harness discovery skipped: {e}")
+
+    # Bedrock AgentCore runtimes (containerized / direct-code agents), excluding
+    # the runtimes that merely back a harness discovered above.
     try:
         agentcore = boto3.client('bedrock-agentcore-control')
         resp = agentcore.list_agent_runtimes()
+        skipped = 0
         for rt in resp.get('agentRuntimes', []):
             rt_id = rt.get('agentRuntimeId', rt.get('agentRuntimeName', ''))
             rt_name = rt.get('agentRuntimeName', rt_id)
+            if rt_name in harness_runtime_names:
+                skipped += 1
+                continue
             agents.append({
                 'agentId': _clean_native_id(rt_name, rt_id),
                 'name': rt_name,
@@ -370,16 +432,19 @@ def discover_native(config: dict) -> list:
                 'platformAgentId': rt_id,
                 'category': 'AWS Native',
                 'system': 'Amazon Bedrock AgentCore',
+                'runtime': 'AgentCore Runtime',
                 'status': 'pending-review',
                 **demo_metrics(rt_id),
                 'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
                 'owner': '',
                 'platformMetadata': {'source': 'bedrock-agentcore', 'status': rt.get('status', '')},
             })
-        logger.info(f"Native: found {len(resp.get('agentRuntimes', []))} AgentCore runtime(s)")
+        logger.info(
+            f"Native: found {len(resp.get('agentRuntimes', []))} AgentCore runtime(s), "
+            f"{skipped} skipped as harness-backing"
+        )
     except Exception as e:
-        # AgentCore is gated off by default, so this is expected to be absent
-        logger.info(f"Native AgentCore discovery skipped: {e}")
+        logger.info(f"Native AgentCore runtime discovery skipped: {e}")
 
     return agents
 
@@ -399,7 +464,7 @@ def discover_native(config: dict) -> list:
 # single-pane-across-accounts story and the account/region-scoped data model.
 #
 # Note the agentId carries accountId + region so identically-named agents in different
-# accounts do not collide: native:<accountId>:<region>:bedrock-agent:<id>.
+# accounts do not collide: native:<accountId>:<region>:harness:<id>.
 
 # Capped at 2 agents (one representative member account) to keep the cross-account
 # story without flooding the catalog.
@@ -426,7 +491,7 @@ def discover_aws_org(config: dict) -> list:
     for acct in ORG_SIMULATED_ACCOUNTS:
         for src in acct['agents']:
             agents.append({
-                'agentId': f"native:{acct['accountId']}:{acct['region']}:bedrock-agent:{src['platformAgentId']}",
+                'agentId': f"native:{acct['accountId']}:{acct['region']}:harness:{src['platformAgentId']}",
                 'name': src['name'],
                 'platform': 'aws-org',
                 'platformAgentId': src['platformAgentId'],
@@ -434,10 +499,11 @@ def discover_aws_org(config: dict) -> list:
                 'accountName': acct['accountName'],
                 'region': acct['region'],
                 'category': src['category'],
-                'system': 'Amazon Bedrock Agents',
-                # Cross-account org agents ARE Bedrock agents, so the runtime is
-                # honest here; still marked external-connector as their origin.
-                'runtime': 'Bedrock Agent',
+                'system': 'Amazon Bedrock AgentCore',
+                # These stand in for agents a member account would really be
+                # building today, which is AgentCore rather than Classic (whose
+                # CreateAgent is closed to accounts without prior usage).
+                'runtime': 'AgentCore Harness',
                 'source': 'external-connector',
                 'status': src['status'],
                 'requests': src['requests'],
@@ -525,7 +591,7 @@ def _list_bedrock_agents_in(session, account_id: str, account_name: str, region:
                     'region': region,
                     'category': 'AWS Native',
                     'system': 'Amazon Bedrock Agents',
-                    'runtime': 'Bedrock Agent',
+                    'runtime': 'Bedrock Agent Classic',
                     'source': 'external-connector',
                     'status': 'pending-review',
                     **demo_metrics(f"{account_id}:{platform_agent_id}"),
@@ -545,19 +611,72 @@ def _list_bedrock_agents_in(session, account_id: str, account_name: str, region:
     return found
 
 
-def _list_agentcore_runtimes_in(session, account_id: str, account_name: str, region: str) -> list:
-    """List Bedrock AgentCore runtimes in one account+region via an assumed session.
+def _list_agentcore_harnesses_in(session, account_id: str, account_name: str, region: str):
+    """List Bedrock AgentCore harnesses in one account+region via an assumed session.
 
-    Mirrors the single-account native connector, which scans BOTH Bedrock Agents and
-    AgentCore runtimes — cross-account discovery must cover both too.
+    Returns (records, backing_runtime_names). The second value feeds the runtime
+    lister so a harness is not also registered as its own backing runtime — see the
+    same dedup in discover_native().
     """
     found = []
+    backing = set()
+    try:
+        client = session.client('bedrock-agentcore-control', region_name=region)
+        for h in client.list_harnesses().get('harnesses', []):
+            h_id = h.get('harnessId', h.get('harnessName', ''))
+            h_name = h.get('harnessName', h_id)
+            backing.add(f"harness_{h_name}")
+            found.append({
+                'agentId': f"native:{account_id}:{region}:harness:{h_id}",
+                'name': h_name,
+                'platform': 'aws-org',
+                'platformAgentId': h_id,
+                'accountId': account_id,
+                'accountName': account_name,
+                'region': region,
+                'category': 'AWS Native',
+                'system': 'Amazon Bedrock AgentCore',
+                'runtime': 'AgentCore Harness',
+                'source': 'external-connector',
+                'status': 'pending-review',
+                **demo_metrics(f"{account_id}:{h_id}"),
+                'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
+                'owner': '',
+                'platformMetadata': {
+                    'source': 'aws-organizations',
+                    'accountId': account_id,
+                    'accountName': account_name,
+                    'region': region,
+                    'status': h.get('status', ''),
+                },
+            })
+    except Exception as e:
+        # Harnesses may not be available in every region — expected; log and move on.
+        logger.info(f"Org discovery: list_harnesses skipped in {account_id}/{region}: {e}")
+    logger.info(f"Org discovery: {account_id}/{region} harnesses found={len(found)}")
+    return found, backing
+
+
+def _list_agentcore_runtimes_in(session, account_id: str, account_name: str, region: str,
+                                skip_names=None) -> list:
+    """List Bedrock AgentCore runtimes in one account+region via an assumed session.
+
+    Mirrors the single-account native connector, which scans harnesses, runtimes and
+    Bedrock Agents Classic — cross-account discovery must cover all three too.
+    `skip_names` carries the harness-backing runtime names to exclude.
+    """
+    found = []
+    skip_names = skip_names or set()
+    skipped = 0
     try:
         client = session.client('bedrock-agentcore-control', region_name=region)
         resp = client.list_agent_runtimes()
         for rt in resp.get('agentRuntimes', resp.get('agentRuntimeSummaries', [])):
             rt_id = rt.get('agentRuntimeId', rt.get('agentRuntimeName', ''))
             rt_name = rt.get('agentRuntimeName', rt_id)
+            if rt_name in skip_names:
+                skipped += 1
+                continue
             found.append({
                 'agentId': f"native:{account_id}:{region}:agentcore:{rt_id}",
                 'name': rt_name,
@@ -568,7 +687,7 @@ def _list_agentcore_runtimes_in(session, account_id: str, account_name: str, reg
                 'region': region,
                 'category': 'AWS Native',
                 'system': 'Amazon Bedrock AgentCore',
-                'runtime': 'AgentCore (Strands)',
+                'runtime': 'AgentCore Runtime',
                 'source': 'external-connector',
                 'status': 'pending-review',
                 **demo_metrics(f"{account_id}:{rt_id}"),
@@ -585,6 +704,8 @@ def _list_agentcore_runtimes_in(session, account_id: str, account_name: str, reg
     except Exception as e:
         # AgentCore may not be available in every region — expected; log and move on.
         logger.info(f"Org discovery: list_agent_runtimes skipped in {account_id}/{region}: {e}")
+    logger.info(f"Org discovery: {account_id}/{region} runtimes found={len(found)}, "
+                f"{skipped} skipped as harness-backing")
     return found
 
 
@@ -627,7 +748,13 @@ def _discover_aws_org_real() -> list:
         scanned += 1
         for region in ORG_DISCOVERY_REGIONS:
             agents.extend(_list_bedrock_agents_in(session, account_id, account_name, region))
-            agents.extend(_list_agentcore_runtimes_in(session, account_id, account_name, region))
+            # Harnesses first: their backing runtimes are then skipped below so one
+            # logical agent is not registered twice.
+            harnesses, backing = _list_agentcore_harnesses_in(
+                session, account_id, account_name, region)
+            agents.extend(harnesses)
+            agents.extend(_list_agentcore_runtimes_in(
+                session, account_id, account_name, region, skip_names=backing))
     logger.info(f"Org discovery: scanned {scanned} member account(s) across "
                 f"{len(ORG_DISCOVERY_REGIONS)} region(s); found {len(agents)} agent(s)")
     return agents

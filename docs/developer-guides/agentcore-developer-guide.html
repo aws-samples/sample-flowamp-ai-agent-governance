@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Amazon Bedrock AgentCore — FlowAMP Developer Guide (v3)</title>
+<title>Amazon Bedrock AgentCore — FlowAMP Developer Guide (v4)</title>
 <style>
   :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --orange: #fb923c; --purple: #b388ff; --code-bg: #0d1117; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -46,30 +46,31 @@
 <h2>AgentCore Services — What FlowAMP Uses vs. What to Adopt Next</h2>
 
 <div class="svc-grid">
-  <div class="svc active"><strong>⚡ Runtime</strong><span class="badge-active">✓ deployed</span><br><span>3 core + up to 3 sample Strands runtimes</span></div>
-  <div class="svc active"><strong>📊 Observability</strong><span class="badge-active">✓ used</span><br><span>CloudWatch logs/metrics + CloudTrail</span></div>
-  <div class="svc needed"><strong>🌐 Gateway</strong><span class="badge-needed">→ adopt</span><br><span>MCP tools, Lambda→MCP</span></div>
+  <div class="svc active"><strong>⚡ Runtime</strong><span class="badge-active">✓ deployed</span><br><span>2 scanner runtimes</span></div>
+  <div class="svc active"><strong>🤖 Harness</strong><span class="badge-active">✓ deployed</span><br><span>management + 3 sample agents</span></div>
+  <div class="svc active"><strong>📊 Observability</strong><span class="badge-active">✓ used</span><br><span>CloudWatch + CloudTrail + vended logs</span></div>
+  <div class="svc active"><strong>🌐 Gateway</strong><span class="badge-active">✓ deployed</span><br><span>agent-handler as MCP tools</span></div>
   <div class="svc needed"><strong>📋 Registry</strong><span class="badge-needed">→ adopt</span><br><span>Agent/tool catalog</span></div>
-  <div class="svc needed"><strong>🧠 Memory</strong><span class="badge-needed">→ adopt</span><br><span>Session + long-term</span></div>
+  <div class="svc active"><strong>🧠 Memory</strong><span class="badge-active">✓ in use</span><br><span>harness-managed session memory</span></div>
   <div class="svc needed"><strong>🔑 Identity</strong><span class="badge-needed">→ adopt</span><br><span>Agent auth, IdP</span></div>
   <div class="svc needed"><strong>🛡️ Policy</strong><span class="badge-needed">→ adopt</span><br><span>Cedar rules on Gateway</span></div>
-  <div class="svc needed"><strong>🧪 Evaluations</strong><span class="badge-needed">→ adopt</span><br><span>Automated agent testing</span></div>
+  <div class="svc active"><strong>🧪 Evaluations</strong><span class="badge-active">✓ deployed</span><br><span>online eval per core agent</span></div>
   <div class="svc needed"><strong>💻 Code Interpreter</strong><span class="badge-needed">→ adopt</span><br><span>Sandboxed code exec</span></div>
   <div class="svc needed"><strong>🌍 Browser</strong><span class="badge-needed">→ adopt</span><br><span>Web interaction</span></div>
 </div>
 
-<p><strong>Current state:</strong> AgentCore <strong>Runtime is really deployed</strong> — every <span class="ic">cdk deploy</span> stands up three core Strands runtimes (management agent, discovery-scanner, compliance-scanner), plus up to three optional sample workload runtimes behind <span class="ic">deploySampleAgents=true</span>. Observability is used via CloudWatch (runtime logs/metrics) and CloudTrail. The remaining AgentCore services are not yet wired in; the sections below map each FlowAMP capability to the AgentCore service you would adopt to replace the current custom Lambda/DynamoDB implementation.</p>
+<p><strong>Current state:</strong> FlowAMP uses <strong>two execution surfaces</strong>. The management agent is an AgentCore <strong>Harness</strong> — model, system prompt and tools as configuration, with AgentCore running the agent loop and no code bundle at all — and it reaches its tools through an AgentCore <strong>Gateway</strong> fronting the <span class="ic">agent-handler</span> Lambda as MCP tools. The two scanners are AgentCore <strong>Runtimes</strong> (direct-code deploy) because they are real Python programs with custom tools, DynamoDB writes and cross-account calls, which a harness cannot host. Up to three optional sample workload <em>harnesses</em> deploy behind <span class="ic">deploySampleAgents=true</span>. Harness <strong>Memory</strong> is on by default (session history), <strong>Evaluations</strong> are provisioned per core agent at runtime, and observability covers CloudWatch runtime logs/metrics, CloudTrail, and vended Gateway logs (plus X-Ray traces when <span class="ic">enableTransactionSearch=true</span>). The sections below map the remaining services to what you would adopt next.</p>
 
 <h2>1. AgentCore Runtime → Agent Execution <span class="badge-active">✓ DEPLOYED</span></h2>
 <div class="card">
-  <p><strong>Current (real):</strong> FlowAMP deploys real AgentCore runtimes on every deploy. Three are <strong>core / always-on</strong> (no flag):</p>
+  <p><strong>Current (real):</strong> FlowAMP deploys three <strong>core / always-on</strong> agents on every deploy (no flag) across two execution surfaces — one harness and two runtimes:</p>
   <ul>
-    <li><strong>management agent</strong> (<span class="ic">assetsSrc/agents/agent-runtime/</span>) — a Strands agent that answers natural-language questions over the <span class="ic">AgentTable</span> via <span class="ic">list_agents</span> / <span class="ic">get_agent</span> / <span class="ic">get_agent_metrics</span> tools.</li>
+    <li><strong>management agent</strong> — a <em>harness</em> declared in <span class="ic">cdk/lib/team-stack.ts</span> (no agent source of its own) that answers natural-language questions over the <span class="ic">AgentTable</span>, calling the <span class="ic">agent-handler</span> Lambda's read operations as MCP tools through an AgentCore Gateway.</li>
     <li><strong>discovery-scanner</strong> (<span class="ic">assetsSrc/agents/discovery-scanner/</span>) — enumerates the account's AgentCore runtimes and LLM-classifies them (see §3).</li>
     <li><strong>compliance-scanner</strong> (<span class="ic">assetsSrc/agents/compliance-scanner/</span>) — runs the deterministic compliance-checks framework plus LLM judgment and audits the agents it finds (see §7).</li>
   </ul>
-  <p>Up to <strong>three optional sample workload runtimes</strong> (claims-triage, supply-chain, request-intake) deploy behind <span class="ic">-c deploySampleAgents=true</span>, giving discovery genuine agents to find. All agents run <strong>model <span class="ic">us.anthropic.claude-sonnet-4-6</span></strong> via an inference profile.</p>
-  <p><strong>How it's deployed — AgentCore direct code deployment (Lambda-style shared responsibility):</strong> the runtimes use <span class="ic">AgentRuntimeArtifact.fromCodeAsset</span> with <span class="ic">AgentCoreRuntime.PYTHON_3_12</span>. AWS provides the Python language runtime; <strong>you must vendor your dependencies into the uploaded zip</strong>. <span class="ic">fromCodeAsset</span> uploads the directory as-is and does <em>not</em> run pip — a bundle with only a bare <span class="ic">requirements.txt</span> would crash at runtime with <span class="ic">ModuleNotFoundError</span> even though the runtime shows READY.</p>
+  <p>Up to <strong>three optional sample workload harnesses</strong> (claims-triage, supply-chain, request-intake) deploy behind <span class="ic">-c deploySampleAgents=true</span>, giving discovery genuine agents to find. They declare no tools, and <span class="ic">allowedTools: []</span> is set explicitly: left unset it defaults to <span class="ic">*</span>, which also grants the harness's built-in <span class="ic">shell</span> and <span class="ic">file_operations</span> tools. All agents run <strong>model <span class="ic">us.anthropic.claude-sonnet-4-6</span></strong> via an inference profile.</p>
+  <p><strong>How the RUNTIMES are deployed — AgentCore direct code deployment (Lambda-style shared responsibility).</strong> Harnesses need none of this: they are pure configuration, so nothing is bundled for them. The two scanner runtimes use <span class="ic">AgentRuntimeArtifact.fromCodeAsset</span> with <span class="ic">AgentCoreRuntime.PYTHON_3_12</span>. AWS provides the Python language runtime; <strong>you must vendor your dependencies into the uploaded zip</strong>. <span class="ic">fromCodeAsset</span> uploads the directory as-is and does <em>not</em> run pip — a bundle with only a bare <span class="ic">requirements.txt</span> would crash at runtime with <span class="ic">ModuleNotFoundError</span> even though the runtime shows READY.</p>
   <p><span class="ic">cdk/lib/agent-bundle.ts</span> solves this at <strong>synth time, with no Docker</strong>: it copies the agent source + any shared packages (<span class="ic">flowamp_tools</span>, <span class="ic">flowamp_compliance_checks</span>) into a staging bundle, then vendors the arm64/cp312 wheels into it with <span class="ic">uv</span>. A recent <span class="ic">boto3&gt;=1.40</span> is vendored because the <span class="ic">bedrock-agentcore-control</span> service model postdates boto3 1.35.</p>
   <pre><code># cdk/lib/agent-bundle.ts — vendor arm64/cp312 deps INTO the bundle (no Docker, no pip at runtime)
 uv pip install \
@@ -101,7 +102,7 @@ const discoveryScanner = new agentcore.Runtime(this, "DiscoveryScannerRuntime", 
 });
 discoveryScanner.addToRolePolicy(modelInvokeStatement);
 // RuntimeArn is surfaced as a CfnOutput (DiscoveryScannerRuntimeArn) for the invoker Lambda.</code></pre>
-  <p><strong>Adopt next:</strong> the management agent is reached through the <span class="ic">api-handler</span> Lambda → Bedrock Agent path today; the scanner runtimes are invoked through small <em>invoker</em> Lambdas (<span class="ic">discovery-scan-invoker</span>, <span class="ic">compliance-scan-invoker</span>) because a runtime has no HTTP API of its own. You could front the runtimes with AgentCore Runtime endpoints + bidirectional streaming and retire some of that Lambda glue.</p>
+  <p><strong>Adopt next:</strong> the management agent is a harness, reached through the <span class="ic">api-handler</span> Lambda via <span class="ic">InvokeHarness</span>; the scanner runtimes are invoked through small <em>invoker</em> Lambdas (<span class="ic">discovery-scan-invoker</span>, <span class="ic">compliance-scan-invoker</span>) because a runtime has no HTTP API of its own. You could front the runtimes with AgentCore Runtime endpoints + bidirectional streaming and retire some of that Lambda glue.</p>
 </div>
 
 <h2>2. AgentCore Observability → Traces &amp; Monitoring <span class="badge-active">✓ USED</span></h2>
@@ -125,12 +126,12 @@ agents.extend(response.get('agentRuntimes', response.get('agentRuntimeSummaries'
   <p><strong>Adopt next:</strong> AgentCore Registry is a managed catalog for agents, MCP servers, tools, and skills, with governed publish/review/approve workflows and hybrid semantic + keyword search. FlowAMP could register discovered agents into Registry and treat the DynamoDB table as a governance-annotation extension (owner, risk tier, compliance state) layered over the managed source of truth — rather than being the source of truth itself.</p>
 </div>
 
-<h2>4. AgentCore Gateway → Tool Access (currently Bedrock Agent action groups)</h2>
+<h2>4. AgentCore Gateway → Tool Access <span class="badge">adopted</span></h2>
 <div class="card">
-  <p><strong>Current:</strong> the management Bedrock Agent uses a Lambda action group (<span class="ic">agent-handler</span> + <span class="ic">openapi.json</span>). The scanner runtimes call AWS control-plane APIs directly with scoped IAM (they are not fronted by a Gateway). External-platform integration lives in the <span class="ic">discovery-handler</span> Lambda (Microsoft/Okta/MuleSoft connectors are simulated today).</p>
-  <p><strong>Adopt next:</strong> AgentCore Gateway converts existing Lambdas and APIs into <strong>MCP-compatible tools</strong> that any agent can discover and invoke, with JWT/IAM auth, semantic tool search, and interceptors.</p>
+  <p><strong>Current:</strong> the management harness reaches its tools through an AgentCore <strong>Gateway</strong> with a Lambda target (<span class="ic">agent-handler</span>), which exposes the registry read operations as MCP tools with SigV4 inbound auth. The tool schema is declared inline in CDK; the old <span class="ic">openapi.json</span> is gone. The scanner runtimes call AWS control-plane APIs directly with scoped IAM (they are not fronted by a Gateway). External-platform integration lives in the <span class="ic">discovery-handler</span> Lambda (Microsoft/Okta/MuleSoft connectors are simulated today).</p>
+  <p><strong>Adopt next:</strong> the Gateway is in place for the registry tools. Still available: <strong>semantic tool search</strong> (so an agent finds the right tool among many), <strong>interceptors</strong>, and JWT inbound auth if per-user identity needs to reach the tools — note SigV4 does not propagate the caller identity, so FlowAMP authorizes per user at the API Gateway/Cognito edge instead.</p>
   <ul>
-    <li>Wrap <span class="ic">agent-handler</span> as an MCP tool instead of a Bedrock Agent action group + OpenAPI spec.</li>
+    <li><span class="ic">agent-handler</span> is exposed as MCP tools through a Gateway Lambda target, replacing the action group + OpenAPI spec.</li>
     <li>Connect the (currently simulated) external connectors to real external MCP servers.</li>
     <li>Gate cross-agent tool calls with Gateway auth + interceptors instead of bespoke invoker Lambdas.</li>
   </ul>
@@ -209,9 +210,9 @@ forbid(
     <tr><td>Core agents (management, discovery-scanner, compliance-scanner)</td><td><strong>AgentCore Runtime</strong> (Strands, direct-code deploy)</td><td><strong>Runtime</strong></td><td><strong>Deployed today</strong> — always-on, arm64 deps vendored via <span class="ic">uv</span> (no Docker)</td></tr>
     <tr><td>Sample workload agents (claims/supply-chain/request-intake)</td><td><strong>AgentCore Runtime</strong> behind <span class="ic">deploySampleAgents=true</span></td><td><strong>Runtime</strong></td><td><strong>Deployed on flag</strong> — real, discoverable runtimes</td></tr>
     <tr><td>Runtime logs / metrics / audit signals</td><td>CloudWatch logs + custom metrics + CloudTrail</td><td><strong>Observability</strong></td><td><strong>Used today</strong> (CW/CloudTrail); adopt OTEL traces next</td></tr>
-    <tr><td>Agent Chat (management agent)</td><td>API Gateway → api-handler Lambda → Bedrock Agent</td><td><strong>Runtime</strong> endpoint (streaming)</td><td>Adopt: call the Runtime endpoint directly, retire glue Lambda</td></tr>
+    <tr><td>Agent Chat (management agent)</td><td>API Gateway → api-handler Lambda → <strong>Harness</strong> (<span class="ic">InvokeHarness</span>)</td><td>Managed agent loop; streaming still buffered at the API</td><td>Next: stream the response through to the UI</td></tr>
     <tr><td>Agent Catalog / Discovery</td><td>DynamoDB <span class="ic">AgentTable</span> written by the discovery-scanner + org Lambda</td><td><strong>Registry</strong></td><td>Adopt: register discovered agents; table becomes governance overlay</td></tr>
-    <tr><td>Tool Invocation</td><td>Bedrock Agent action group (Lambda + OpenAPI); scanners call AWS APIs via IAM</td><td><strong>Gateway</strong> (Lambda→MCP)</td><td>Adopt: wrap tools as MCP, semantic discovery, interceptors</td></tr>
+    <tr><td>Tool Invocation</td><td><strong>Gateway</strong> (Lambda→MCP) for the management agent; scanners call AWS APIs via IAM</td><td>Gateway (Lambda→MCP)</td><td>Adopted for the registry tools; next: semantic discovery, interceptors</td></tr>
     <tr><td>Compliance / RAI scoring</td><td>compliance-scanner (deterministic checks + LLM) + <span class="ic">rai-scorer</span> Lambda</td><td><strong>Observability</strong> + <strong>Policy</strong> + <strong>Evaluations</strong></td><td>Audited today; adopt Cedar enforcement + managed evals</td></tr>
     <tr><td>Agent Operating Policies</td><td>DynamoDB metadata rows (not enforced)</td><td><strong>Policy</strong> (Cedar) + <strong>Gateway</strong> interceptors</td><td>Adopt: enforce boundaries at tool-call time</td></tr>
     <tr><td>Access Control Matrix</td><td>Cognito on the API; scoped IAM on runtimes; display-only matrix</td><td><strong>Identity</strong></td><td>Adopt: IdP-backed role→agent enforcement</td></tr>
@@ -238,7 +239,7 @@ forbid(
 </div>
 
 <div style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem;">
-  <p>FlowAMP · AI Agent Governance on AWS · Amazon Bedrock AgentCore Developer Guide v3 · Reflects the current implementation (July 2026).</p>
+  <p>FlowAMP · AI Agent Governance on AWS · Amazon Bedrock AgentCore Developer Guide v4 · Reflects the current implementation (August 2026, post AgentCore harness migration).</p>
   <p>Source of truth in this repo: <span class="ic">cdk/lib/agent-bundle.ts</span> (synth-time <span class="ic">uv</span> vendoring / direct-code bundle), <span class="ic">cdk/lib/team-stack.ts</span> (the 3 core runtimes, IAM, <span class="ic">ListAgentRuntimes</span>, RuntimeArn outputs), <span class="ic">cdk/lib/sample-agents-stack.ts</span> (standalone samples), <span class="ic">assetsSrc/agents/</span> (the Strands agents), and <span class="ic">README.md</span>.</p>
   <p>Docs: <a href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy-python.html" style="color:var(--accent)">Direct code deploy (Python)</a> · <a href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html" style="color:var(--accent)">AgentCore Overview</a> · <a href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html" style="color:var(--accent)">Gateway</a> · <a href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability.html" style="color:var(--accent)">Observability</a></p>
 </div>

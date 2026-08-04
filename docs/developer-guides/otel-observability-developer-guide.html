@@ -136,7 +136,14 @@ environmentVariables: { AGENT_TABLE_NAME: agentTable.tableName, PORT: "8080", ..
 <div class="card">
   <p>Spans are only indexed into <span class="ic">aws/spans</span> when <strong>Transaction Search</strong> is
   enabled — a one-time setup per account/region. Without it, agents emit spans but nothing is queryable, and
-  Evaluations produces nothing. Check and enable via API:</p>
+  Evaluations produces nothing.
+  <strong>The stack can do this for you:</strong> deploy with <span class="ic">-c enableTransactionSearch=true</span> and a custom resource
+  flips the account's trace segment destination and polls until it reports <span class="ic">CloudWatchLogs</span> + <span class="ic">ACTIVE</span>
+  (the update is asynchronous, so it cannot be treated as done when the API returns). It is off by default because
+  enabling it is an <strong>account-wide</strong> change that moves span ingestion onto CloudWatch pricing, and it is safe to
+  re-run where already enabled. The same flag also adds vended <strong>trace</strong> delivery for the AgentCore Gateway;
+  Gateway request/response <strong>logs</strong> are delivered regardless.
+  To do it by hand instead:</p>
   <pre><code># status: "CloudWatchLogs" + "ACTIVE" = enabled; "XRay" = not enabled
 aws xray get-trace-segment-destination --region &lt;region&gt;
 

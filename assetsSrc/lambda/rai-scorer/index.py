@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """
 RAI Scorer Lambda — calculates Responsible AI scores from real AWS signals.
 
@@ -62,6 +64,23 @@ def count_cloudtrail_events(resource_name, hours=24):
         return 0
 
 
+def _guardrail_dims(agent, extra=None):
+    """Build the CloudWatch dimensions for a Bedrock Guardrails metric.
+
+    Guardrail metrics are dimensioned by GuardrailArn (+ optional GuardrailVersion
+    / GuardrailPolicyType) — NOT by agent id. An agent record carries a
+    'guardrailArn' only when a guardrail is attached; without one we return an
+    empty dimension set, which yields no datapoints (the no-signal path).
+    """
+    dims = []
+    arn = agent.get('guardrailArn')
+    if arn:
+        dims.append({'Name': 'GuardrailArn', 'Value': arn})
+    if extra:
+        dims.extend(extra)
+    return dims
+
+
 def score_fairness(agent):
     """
     Fairness = how well guardrails prevent biased/unfair outputs.
@@ -70,15 +89,22 @@ def score_fairness(agent):
     High intervention = model tried to produce biased content (guardrail caught it).
     Score: starts at 95, penalized by intervention rate.
     """
-    invocations = agent.get('requests', 0) or 1
-    errors = agent.get('errors', 0)
+    # DynamoDB returns numbers as Decimal; coerce to float so arithmetic with the
+    # float coefficients below cannot raise "float / Decimal" TypeErrors.
+    invocations = float(agent.get('requests', 0) or 1)
+    errors = float(agent.get('errors', 0) or 0)
     error_rate = errors / max(invocations, 1)
 
-    # Check guardrail interventions (if guardrail is attached)
-    guardrail_interventions = get_metric(
-        'AWS/Bedrock', 'GuardrailInterventions',
-        [{'Name': 'AgentId', 'Value': agent['agentId']}],
-    )
+    # Check guardrail interventions (if a guardrail is attached). The Bedrock
+    # Guardrails metric is 'InvocationsIntervened' in the 'AWS/Bedrock/Guardrails'
+    # namespace, dimensioned by GuardrailArn — there is no 'GuardrailInterventions'
+    # metric and no per-AgentId dimension. Agents with no attached guardrail
+    # produce no datapoints, which reads as no signal rather than a bad score.
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/monitoring-guardrails-cw-metrics.html
+    guardrail_interventions = float(get_metric(
+        'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+        _guardrail_dims(agent),
+    ) or 0)
     intervention_rate = guardrail_interventions / max(invocations, 1)
 
     # Base score 95, penalize for high intervention rate and error rate
@@ -114,8 +140,8 @@ def score_accountability(agent):
     Signals: error rate (low = good), whether errors are logged (CloudTrail),
     and whether the agent has been recently updated (active ownership).
     """
-    invocations = agent.get('requests', 0) or 1
-    errors = agent.get('errors', 0)
+    invocations = float(agent.get('requests', 0) or 1)
+    errors = float(agent.get('errors', 0) or 0)
     error_rate = errors / max(invocations, 1)
 
     # Check if errors are being logged (CloudWatch Logs exist)
@@ -139,26 +165,55 @@ def score_ethics(agent):
     A guardrail that is active and blocking harmful content = high ethics score.
     No guardrail at all = lower score.
     """
-    invocations = agent.get('requests', 0) or 1
+    invocations = float(agent.get('requests', 0) or 1)
 
-    # Check guardrail blocks (harmful content stopped)
-    guardrail_blocks = get_metric(
-        'AWS/Bedrock', 'GuardrailBlocked',
-        [{'Name': 'AgentId', 'Value': agent['agentId']}],
-    )
+    # Guardrail content-filter interventions. Same 'InvocationsIntervened' metric,
+    # narrowed by GuardrailPolicyType=ContentPolicy to harmful-content blocks —
+    # there is no 'GuardrailBlocked' metric.
+    guardrail_blocks = float(get_metric(
+        'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+        _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType', 'Value': 'ContentPolicy'}]),
+    ) or 0)
     # Blocks are GOOD — means guardrail is working. But too many = model is problematic.
     block_rate = guardrail_blocks / max(invocations, 1)
 
-    # Check for PII redaction events
-    pii_redactions = get_metric(
-        'AWS/Bedrock', 'GuardrailPiiRedacted',
-        [{'Name': 'AgentId', 'Value': agent['agentId']}],
-    )
+    # PII redaction interventions: same metric, SensitiveInformationPolicy
+    # dimension — there is no 'GuardrailPiiRedacted' metric.
+    pii_redactions = float(get_metric(
+        'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+        _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType', 'Value': 'SensitiveInformationPolicy'}]),
+    ) or 0)
     has_pii_protection = 1 if pii_redactions > 0 or guardrail_blocks >= 0 else 0
 
     # Base 93, small bonus for active PII protection, penalize if block rate is very high
     score = 93 + (has_pii_protection * 3) - (max(block_rate - 0.05, 0) * 100 * 0.5)
     return max(50, min(100, round(score)))
+
+
+def has_live_signal(agent):
+    """True if any real RAI signal exists for this agent (guardrail activity or
+    CloudTrail events).
+
+    Without this gate every agent that has no attached guardrail scores from the
+    uniform no-signal base, so a catalog of agents with varied scores collapses to
+    identical values on the first run. Returning False lets run_scoring() preserve
+    the existing score instead of overwriting it with a fabricated one.
+    """
+    try:
+        total = (
+            float(get_metric('AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+                             _guardrail_dims(agent)) or 0)
+            + float(get_metric('AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+                               _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType',
+                                                        'Value': 'ContentPolicy'}])) or 0)
+            + float(get_metric('AWS/Bedrock/Guardrails', 'InvocationsIntervened',
+                               _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType',
+                                                        'Value': 'SensitiveInformationPolicy'}])) or 0)
+            + count_cloudtrail_events(agent['agentId'])
+        )
+        return total > 0
+    except Exception:
+        return False
 
 
 def compute_overall(fairness, transparency, accountability, ethics):
@@ -207,8 +262,26 @@ def run_scoring():
     rmf_modifier = get_rmf_compliance_score()
 
     updated = 0
+    skipped = 0
     for agent in agents:
         if agent.get('status') == 'decommissioned':
+            continue
+
+        # No live signal and an existing score: stamp the run timestamp but leave
+        # the score alone. Overwriting it would replace a real prior reading with a
+        # value derived from absent data. Once guardrail or CloudTrail signals
+        # exist, the agent scores normally and the value moves.
+        existing_score = float(agent.get('score', 0) or 0)
+        if existing_score > 0 and not has_live_signal(agent):
+            try:
+                table.update_item(
+                    Key={'agentId': agent['agentId'], 'sk': 'INFO'},
+                    UpdateExpression='SET raiUpdatedAt=:ts',
+                    ExpressionAttributeValues={':ts': datetime.utcnow().isoformat() + 'Z'},
+                )
+            except Exception as e:
+                print(f'Timestamp update failed for {agent["agentId"]}: {e}')
+            skipped += 1
             continue
 
         fairness = score_fairness(agent)
@@ -236,8 +309,9 @@ def run_scoring():
         except Exception as e:
             print(f'Update failed for {agent["agentId"]}: {e}')
 
-    print(f'RAI scores updated for {updated}/{len(agents)} agents')
-    return {'updated': updated, 'total': len(agents)}
+    print(f'RAI scores updated for {updated}/{len(agents)} agents '
+          f'({skipped} preserved: no live signal)')
+    return {'updated': updated, 'skipped': skipped, 'total': len(agents)}
 
 
 # CORS headers so the on-demand route works from the CloudFront-hosted UI,

@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Audit tools — the write path for agent decisions and human overrides.
 
 All audit rows live on the shared AgentTable. Two conventions to note:

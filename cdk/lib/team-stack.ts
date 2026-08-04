@@ -1,3 +1,5 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: MIT-0
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
@@ -12,7 +14,11 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as logs from "aws-cdk-lib/aws-logs";
-import * as bedrock from "@aws-cdk/aws-bedrock-alpha";
+// Harness + Gateway are stable L1/L2s in aws-cdk-lib, so the reasoning agent needs
+// no alpha module. The alpha agentcore package is still required for the two scanner
+// RUNTIMES (which run real Python, so a harness cannot host them) and is imported
+// lazily where they are defined.
+import * as agentcore from "aws-cdk-lib/aws-bedrockagentcore";
 // AgentCore online-evaluation configs are created at RUNTIME by the eval-provisioner
 // Lambda (via bedrock-agentcore-control), not as a CFN resource. The control plane
 // validates, at create time, that the runtime-id-suffixed trace log groups already
@@ -20,8 +26,8 @@ import * as bedrock from "@aws-cdk/aws-bedrock-alpha";
 // eval-provisioner block below.
 import { Construct } from "constructs";
 import * as path from "path";
-import * as fs from "fs";
 import { assembleAgentBundle } from "./agent-bundle";
+import { SAMPLE_AGENTS, addSampleHarness } from "./sample-agents";
 
 /**
  * FlowAMP ("Agent Management Platform").
@@ -31,18 +37,32 @@ import { assembleAgentBundle } from "./agent-bundle";
  *     `cdk bootstrap` + `cdk deploy` flow (assets published by the CDK toolkit).
  *   - Lambda / container / site assets are sourced from ../assetsSrc.
  *
- * Core AgentCore agents deploy ALWAYS: the management agent + the governance agents
- * (discovery-scanner, compliance-scanner). The discovery-scanner owns single-account
- * native discovery; the Lambda connector handles external + cross-account org discovery.
+ * The management agent (a HARNESS — model, prompt and gateway tools as configuration)
+ * deploys ALWAYS. The governance agents discovery-scanner and compliance-scanner are
+ * RUNTIMES — real Python programs, which a harness cannot host — and deploy by default
+ * but can be turned off with `-c deployGovernanceAgents=false`, which DISABLES native
+ * discovery and compliance auditing (see the flag's declaration for specifics).
+ * The discovery-scanner owns single-account native discovery; the Lambda connector
+ * handles external + cross-account org discovery.
+ *
+ * Bedrock Agents Classic is deliberately not used: CreateAgent is refused in accounts
+ * without prior usage since it entered maintenance mode on 2026-07-30. FlowAMP still
+ * discovers and audits Classic agents that already exist.
  *
  * Context flags (all default OFF):
  *   - `deploySampleAgents=true` deploys the 3 optional sample workload agents
- *     (claims-triage, supply-chain, request-intake) as real discoverable AgentCore runtimes.
+ *     (claims-triage, supply-chain, request-intake) as real discoverable harnesses.
  *   - `seedSampleData=true`   loads the demo agent catalog + simulated external connectors.
  *   - `enableCostExplorer` (default ON) deploys the real Cost Explorer FinOps collector;
  *     turn off with `-c enableCostExplorer=false`.
  *   - `enableOrgDiscovery` (default ON) real cross-account org discovery; requires the
  *     management/delegated-admin account. Turn off with `-c enableOrgDiscovery=false`.
+ *   - `enableTransactionSearch=true` adds Gateway TRACES delivery. Off by default: it is
+ *     an account-wide switch that moves span ingestion onto CloudWatch pricing. Gateway
+ *     request/response LOGS are delivered regardless.
+ *   - `deployGovernanceAgents` (default ON) the discovery + compliance scanner runtimes.
+ *     `=false` removes them AND the features they provide, and is the only way to drop
+ *     the `uv` synth prerequisite.
  */
 export class TeamStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -54,9 +74,9 @@ export class TeamStack extends cdk.Stack {
 
     // ─── Deploy-time context flags ───
     const seedSampleData = this.node.tryGetContext("seedSampleData") === "true";
-    // Core AgentCore agents (management + discovery-scanner + compliance-scanner)
-    // deploy ALWAYS — no flag. Only the 3 optional SAMPLE workload agents are gated,
-    // default OFF; turn them on with `-c deploySampleAgents=true`.
+    // The 3 optional SAMPLE workload agents, default OFF; turn them on with
+    // `-c deploySampleAgents=true`. (The management harness is unflagged; the two
+    // scanner runtimes are gated by deployGovernanceAgents below.)
     const deploySampleAgents = this.node.tryGetContext("deploySampleAgents") === "true";
     // Real FinOps: deploy the Cost Explorer collector (daily) + activate the
     // flowamp:agentId cost-allocation tag. ON by default. CE-grouped-by-tag
@@ -77,6 +97,42 @@ export class TeamStack extends cdk.Stack {
     // the management account). For a plain org use OrganizationAccountAccessRole.
     const orgDiscoveryRoleName = this.node.tryGetContext("orgDiscoveryRoleName") || "AWSControlTowerExecution";
     const orgDiscoveryRegions = this.node.tryGetContext("orgDiscoveryRegions") || "";
+    // The two governance agents (discovery-scanner + compliance-scanner). ON by
+    // default: they are the governance engine, and FlowAMP without them is a registry
+    // UI rather than a governance platform.
+    //
+    // Turning them off with `-c deployGovernanceAgents=false` DISABLES REAL FEATURES,
+    // it does not merely skip provisioning:
+    //   - Native agent discovery stops entirely. The discovery-handler Lambda's native
+    //     pass is deliberately disabled when the scanner owns discovery, so with the
+    //     scanner absent nothing enumerates this account's AgentCore agents. The
+    //     registry is then populated only by external connectors, cross-account org
+    //     discovery, and manual registration. The UI hides the Discover scan path via
+    //     window.DISCOVERY_SCAN_ENABLED=false.
+    //   - Compliance auditing stops entirely: no AUDIT#/RAI# rows, so the Compliance
+    //     view and per-agent audit history stay empty, and the daily rotation audit
+    //     does not run. The UI disables the audit buttons via
+    //     window.COMPLIANCE_SCAN_ENABLED=false (the routes are absent, and API Gateway
+    //     answers an unknown route with a bare 403 that reads as an auth failure).
+    //   - Their two online-evaluation configs cannot be created (the management
+    //     harness's still can).
+    // Everything else — chat, the registry, FinOps, RAI scoring, AOPs, access — is
+    // unaffected.
+    //
+    // The practical reason to allow it: these are the only components needing
+    // direct-code bundles, so disabling them removes the `uv` prerequisite and ~340 MB
+    // of synth-time dependency vendoring. Useful for evaluating the control plane, or
+    // for running FlowAMP purely over manually-registered agents.
+    const deployGovernanceAgents =
+      this.node.tryGetContext("deployGovernanceAgents") !== "false";
+    // Enable CloudWatch Transaction Search, which the gateway's TRACES delivery
+    // requires. OFF by default and deliberately so: it is an ACCOUNT-WIDE switch that
+    // moves span ingestion onto CloudWatch pricing (1% of spans indexed free). Fine to
+    // opt into, not something a sample should turn on in someone's account uninvited.
+    // Gateway request/response LOGS are delivered either way; only distributed traces
+    // need this. Turn on with `-c enableTransactionSearch=true`.
+    const enableTransactionSearch =
+      this.node.tryGetContext("enableTransactionSearch") === "true";
 
     // Set inside the core-agents block; wired to API routes below so the UI can
     // trigger the discovery-scanner and compliance-scanner directly.
@@ -102,7 +158,7 @@ export class TeamStack extends cdk.Stack {
       timeToLiveAttribute: "ttl",
     });
 
-    // ─── Lambda: Bedrock Agent action group handler ───
+    // ─── Lambda: registry read API (served to the harness as MCP tools) ───
     const agentHandlerFn = new lambda.Function(this, "AgentHandlerFn", {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "index.handler",
@@ -217,15 +273,21 @@ export class TeamStack extends cdk.Stack {
         resources: [`arn:aws:lambda:${this.region}:${this.account}:function:${discoveryFnName}`],
       })
     );
-    // Native discovery reads real AWS agents (Bedrock Agents + AgentCore runtimes).
-    // List/Get only — discovery never invokes or mutates the agents it governs.
-    // Granted regardless of the flag so the handler can enumerate when it owns native.
+    // Native discovery reads real AWS agents: AgentCore harnesses, AgentCore
+    // runtimes, and any legacy Bedrock Agents Classic agents the customer still
+    // runs. List/Get only — discovery never invokes or mutates the agents it
+    // governs. Granted regardless of the flag so the handler can enumerate when it
+    // owns native discovery.
     discoveryFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           "bedrock:ListAgents",
           "bedrock:GetAgent",
           "bedrock-agentcore:ListAgentRuntimes",
+          // Harnesses are the execution surface FlowAMP's own agents run on, so
+          // the registry must enumerate them and not just raw runtimes.
+          "bedrock-agentcore:ListHarnesses",
+          "bedrock-agentcore:GetHarness",
         ],
         resources: ["*"],
       })
@@ -341,76 +403,562 @@ export class TeamStack extends cdk.Stack {
     // (activation/collection is what the flag gates).
     cdk.Tags.of(this).add(COST_TAG_KEY, "platform");
 
-    // ─── Bedrock Agent ───
-    // Model the Bedrock Agent runs on. Two constraints govern this choice:
-    //  1. Bedrock marks older models "Legacy" and blocks accounts that have not
-    //     used them recently; this surfaces as a runtime "ARN not found / model
-    //     access" error on /chat even when access was granted. Choose a current,
-    //     non-Legacy model.
-    //  2. The Bedrock *Agents* runtime injects a `thinking.type.enabled` param
-    //     that Opus 4.8 rejects (it expects thinking.type.adaptive + output_config
-    //     .effort), so Opus 4.8 cannot currently be driven via a Bedrock Agent.
-    // Sonnet 4.6 is current AND compatible with the Agents runtime.
+    // ─── Reasoning agent: AgentCore Harness + Gateway ───
+    // This was a Bedrock Agents Classic agent until the maintenance-mode cutover.
+    // Classic entered maintenance mode on 2026-07-30: CreateAgent returns
+    // AccessDeniedException in any account with no Bedrock Agents usage in the prior
+    // 12 months, and there is no exception process. A published sample has to deploy
+    // into a fresh customer account, so Classic is not an option here.
+    // https://docs.aws.amazon.com/bedrock/latest/userguide/agents-classic-maintenance-mode.html
+    //
+    // The replacement is a HARNESS: model, system prompt and tools declared as
+    // configuration, with AgentCore running the agent loop. Unlike an AgentCore
+    // Runtime it needs no container and no code bundle.
+    //
+    // Model choice: Bedrock marks older models "Legacy" and blocks accounts that
+    // have not used them recently, which surfaces as a runtime "ARN not found /
+    // model access" error on /chat even when access was granted. Sonnet 4.6 is
+    // current and non-Legacy.
     const inferenceProfileId = "us.anthropic.claude-sonnet-4-6";
     const baseModelId = "anthropic.claude-sonnet-4-6";
     const inferenceProfileArn = `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${inferenceProfileId}`;
 
-    const agent = new bedrock.Agent(this, "ManagementAgent", {
-      foundationModel: new bedrock.BedrockFoundationModel(inferenceProfileId, {
-        supportsAgents: true,
+    // The Classic action group (OpenAPI schema + Lambda executor) becomes a Gateway
+    // that fronts the SAME agent-handler Lambda and exposes each operation as an MCP
+    // tool. The harness discovers these and calls them during its reasoning loop.
+    //
+    // Inbound auth is AWS IAM (SigV4): the only caller is the harness in this same
+    // account, so there is no OAuth/JWT provider to stand up. Note that under SigV4
+    // the harness does not propagate per-user identity into tool calls — FlowAMP
+    // authorizes per user at the API Gateway/Cognito edge, not in the tools.
+    const gateway = new agentcore.Gateway(this, "AgentManagementGateway", {
+      gatewayName: "flowamp-agent-management",
+      description: "Read-only FlowAMP registry tools (agents, compliance, AOPs, access).",
+      authorizerConfiguration: agentcore.GatewayAuthorizer.usingAwsIam(),
+    });
+
+    // One MCP tool per operation the OpenAPI schema exposed. The `description` is
+    // what the model reasons over when choosing a tool, so these carry the wording
+    // from the OpenAPI descriptions rather than terse restatements of the name.
+    // addLambdaTarget grants the gateway role lambda:InvokeFunction on
+    // agentHandlerFn and adds the aws:SourceAccount / aws:SourceArn
+    // confused-deputy conditions.
+    const agentIdProperty = {
+      agentId: {
+        type: agentcore.SchemaDefinitionType.STRING,
+        description: "The unique identifier of the agent, for example service-health-monitor.",
+      },
+    };
+    const noInput = { type: agentcore.SchemaDefinitionType.OBJECT, properties: {} };
+
+    gateway.addLambdaTarget("AgentManagementTarget", {
+      gatewayTargetName: "agent-management",
+      description: "FlowAMP registry read API backed by the agent-handler Lambda.",
+      lambdaFunction: agentHandlerFn,
+      toolSchema: agentcore.ToolSchema.fromInline([
+        {
+          name: "listAgents",
+          description:
+            "List all registered AI agents across all platforms. Returns agents from " +
+            "native (AWS), Microsoft, Okta, and MuleSoft platforms. Optionally filter by platform.",
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: {
+              platform: {
+                type: agentcore.SchemaDefinitionType.STRING,
+                description:
+                  "Filter by platform: native, microsoft, okta, mulesoft. Omit for all platforms.",
+              },
+            },
+          },
+        },
+        {
+          name: "getAgent",
+          description: "Get full details for one agent by its ID.",
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: agentIdProperty,
+            required: ["agentId"],
+          },
+        },
+        {
+          name: "getAgentMetrics",
+          description:
+            "Get performance and cost metrics for one agent: requests, errors, " +
+            "response time, monthly cost, cost per invocation, and utilization.",
+          inputSchema: {
+            type: agentcore.SchemaDefinitionType.OBJECT,
+            properties: agentIdProperty,
+            required: ["agentId"],
+          },
+        },
+        {
+          name: "listCompliance",
+          description:
+            "List all compliance frameworks and scores, such as ISO 27001, GDPR, SOC 2, " +
+            "and NIST AI RMF, with score, status, last audit date, and control details.",
+          inputSchema: noInput,
+        },
+        {
+          name: "listAOPs",
+          description:
+            "List all Agent Operating Policies with ID, name, status, assigned agents, " +
+            "execution count, success rate, owner, and trigger condition.",
+          inputSchema: noInput,
+        },
+        {
+          name: "listAccess",
+          description:
+            "List the access control matrix: user roles and their permissions across the " +
+            "agent categories Operations, Asset & Infrastructure, Finance, Security, and Customer.",
+          inputSchema: noInput,
+        },
+        {
+          name: "listPlatforms",
+          description:
+            "List all connected agent platforms with agent count, active count, " +
+            "total monthly cost, and average Responsible AI score.",
+          inputSchema: noInput,
+        },
+        {
+          name: "getCrossPlatformSummary",
+          description:
+            "Get aggregated metrics across all platforms: total agent count, total cost, " +
+            "average Responsible AI score, error totals, and per-platform breakdown. " +
+            "This is the single-pane-of-glass summary.",
+          inputSchema: noInput,
+        },
+      ]),
+    });
+
+    // ─── Gateway observability (logs, and traces when opted in) ───
+    // Unlike the harness — auto-instrumented because it runs inside AgentCore Runtime —
+    // a Gateway emits NO application logs or spans until vended log delivery is wired
+    // up. Without this the tool-call layer is a blind spot: you can see that the agent
+    // decided to call listAgents, but not whether the gateway dispatched it, what
+    // arguments it passed, or why it failed. That is the traceability the governance
+    // story depends on, so LOGS are delivered by default.
+    //
+    // The shape is CloudWatch "vended logs": a delivery SOURCE per log type on the
+    // gateway ARN, a delivery DESTINATION (a log group for logs, X-Ray for traces), and
+    // a DELIVERY joining each pair.
+    const gatewayLogGroup = new logs.LogGroup(this, "GatewayLogs", {
+      // Vended log delivery requires the /aws/vendedlogs/ prefix.
+      logGroupName: `/aws/vendedlogs/bedrock-agentcore/${cdk.Names.uniqueId(this).toLowerCase()}-gateway`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const gatewayLogSource = new logs.CfnDeliverySource(this, "GatewayLogSource", {
+      name: `${this.stackName}-gw-logs`,
+      logType: "APPLICATION_LOGS",
+      resourceArn: gateway.gatewayArn,
+    });
+    const gatewayLogDestination = new logs.CfnDeliveryDestination(this, "GatewayLogDestination", {
+      name: `${this.stackName}-gw-logs-dest`,
+      deliveryDestinationType: "CWL",
+      destinationResourceArn: gatewayLogGroup.logGroupArn,
+    });
+    const gatewayLogDelivery = new logs.CfnDelivery(this, "GatewayLogDelivery", {
+      deliverySourceName: gatewayLogSource.name,
+      deliveryDestinationArn: gatewayLogDestination.attrArn,
+    });
+    // A delivery can only be created once BOTH ends exist. The source is referenced by
+    // name (a plain string), so CloudFormation cannot infer that edge from the template.
+    gatewayLogDelivery.node.addDependency(gatewayLogSource, gatewayLogDestination);
+
+    // Do NOT set exceptionLevel here. Delivery works without it — verified as 93 KB of
+    // INFO events carrying full MCP request/response tracing (initialize → tools/list →
+    // tools/call with bodies, harness id, session id, OTEL trace/span ids).
+    //
+    // If you ever need to confirm a log destination is receiving events, do NOT trust
+    // storedBytes: a stream reports 0 even when it demonstrably holds events, and
+    // group-level storedBytes lags writes. Use `aws logs get-log-events`, or
+    // describe-log-streams and read firstEventTimestamp/lastEventTimestamp.
+
+    if (enableTransactionSearch) {
+      // A TRACES → XRAY delivery can only be created in an account whose X-Ray trace
+      // segment destination is already CloudWatchLogs. An account defaults to XRay, so
+      // without the two resources below the delivery fails the whole stack with:
+      //   "X-Ray Delivery Destination is supported with CloudWatch Logs as a Trace
+      //    Segment Destination. Please enable ... UpdateTraceSegmentDestination"
+      // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html
+      //
+      // Step 1: let X-Ray write spans into the reserved log groups. This resource policy
+      // is account-level (fixed policy name), not attached to a role.
+      const spanIngestionPolicy = new logs.CfnResourcePolicy(this, "XraySpanIngestionPolicy", {
+        policyName: `${this.stackName}-xray-span-ingestion`,
+        policyDocument: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Sid: "TransactionSearchXRayAccess",
+              Effect: "Allow",
+              Principal: { Service: "xray.amazonaws.com" },
+              Action: "logs:PutLogEvents",
+              Resource: [
+                `arn:aws:logs:${this.region}:${this.account}:log-group:aws/spans:*`,
+                `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/application-signals/data:*`,
+              ],
+              Condition: {
+                ArnLike: { "aws:SourceArn": `arn:aws:xray:${this.region}:${this.account}:*` },
+                StringEquals: { "aws:SourceAccount": this.account },
+              },
+            },
+          ],
+        }),
+      });
+
+      // Step 2: flip the account's trace segment destination to CloudWatch Logs, then
+      // WAIT for it to report ACTIVE. Two things this has to get right:
+      //
+      // 1. NOT AWS::XRay::TransactionSearchConfig. That resource is an account+region
+      //    SINGLETON: where Transaction Search is already on it fails Create with
+      //    AlreadyExists ("Resource handler returned message: null") and rolls back the
+      //    whole stack — which is what a reused account, or one where someone enabled it
+      //    by hand, would hit. UpdateTraceSegmentDestination is a PUT, so calling the
+      //    API directly is idempotent.
+      // 2. The call is ASYNCHRONOUS. It returns {destination: CloudWatchLogs, status:
+      //    PENDING} and X-Ray finishes in the background (creating aws/spans and
+      //    /aws/application-signals/data, StartDiscovery, the CloudTrail service-linked
+      //    channel). An AwsCustomResource returns as soon as the API responds, so the
+      //    trace delivery gets created while the account is still PENDING and fails. The
+      //    flip can also be REJECTED after responding, so the only trustworthy signal is
+      //    polling GetTraceSegmentDestination until it reports CloudWatchLogs + ACTIVE.
+      //    Hence an inline-Lambda custom resource rather than AwsCustomResource.
+      //
+      // On Delete this deliberately does NOTHING: the setting is account-wide and
+      // pre-exists this stack in some accounts, so reverting it on teardown could switch
+      // off tracing something else depends on.
+      const transactionSearchFn = new lambda.Function(this, "TransactionSearchFn", {
+        runtime: lambda.Runtime.PYTHON_3_12,
+        handler: "index.handler",
+        // The docs warn spans can take ~10 min to become searchable, but ACTIVE arrives
+        // well before that.
+        timeout: cdk.Duration.minutes(10),
+        code: lambda.Code.fromInline(
+          [
+            "import json, time, urllib.request",
+            "import boto3",
+            "",
+            "def _respond(event, context, status, reason=None):",
+            "    body = json.dumps({",
+            "        'Status': status,",
+            "        'Reason': reason or ('See CloudWatch log stream: ' + context.log_stream_name),",
+            "        'PhysicalResourceId': 'xray-transaction-search',",
+            "        'StackId': event['StackId'],",
+            "        'RequestId': event['RequestId'],",
+            "        'LogicalResourceId': event['LogicalResourceId'],",
+            "        'Data': {},",
+            "    }).encode('utf-8')",
+            "    req = urllib.request.Request(event['ResponseURL'], data=body, method='PUT')",
+            "    req.add_header('content-type', '')",
+            "    req.add_header('content-length', str(len(body)))",
+            "    urllib.request.urlopen(req, timeout=30)",
+            "",
+            "def handler(event, context):",
+            "    try:",
+            "        # Delete is a no-op on purpose: the setting is account-wide.",
+            "        if event['RequestType'] == 'Delete':",
+            "            _respond(event, context, 'SUCCESS', 'Delete is a no-op')",
+            "            return",
+            "        x = boto3.client('xray')",
+            "        cur = x.get_trace_segment_destination()",
+            "        if cur.get('Destination') != 'CloudWatchLogs':",
+            "            r = x.update_trace_segment_destination(Destination='CloudWatchLogs')",
+            "            print('update returned: %s' % json.dumps(r, default=str))",
+            "        # Poll until ACTIVE. The update is async and can even be rejected",
+            "        # after responding, so the GET is the only signal worth trusting.",
+            "        deadline = time.time() + max(30, (context.get_remaining_time_in_millis() / 1000.0) - 45)",
+            "        last = None",
+            "        while time.time() < deadline:",
+            "            d = x.get_trace_segment_destination()",
+            "            last = (d.get('Destination'), d.get('Status'))",
+            "            if last == ('CloudWatchLogs', 'ACTIVE'):",
+            "                print('transaction search ACTIVE')",
+            "                _respond(event, context, 'SUCCESS')",
+            "                return",
+            "            print('waiting, currently %s' % (last,))",
+            "            time.sleep(10)",
+            "        _respond(event, context, 'FAILED',",
+            "                 'Transaction Search did not reach CloudWatchLogs/ACTIVE in time; last=%s' % (last,))",
+            "    except Exception as e:",
+            "        _respond(event, context, 'FAILED', reason=str(e))",
+          ].join("\n")
+        ),
+      });
+      // The caller needs far more than xray:*, because the call provisions the two
+      // reserved log groups and wires up Application Signals on your behalf. This
+      // mirrors the "Prerequisites" policy in the docs; granting less fails midway (we
+      // saw "not authorized to perform: logs:PutRetentionPolicy on log-group:aws/spans").
+      for (const statement of [
+        new iam.PolicyStatement({
+          // Account-scoped X-Ray configuration calls; no resource-level support.
+          actions: [
+            "xray:GetTraceSegmentDestination",
+            "xray:UpdateTraceSegmentDestination",
+            "xray:GetIndexingRules",
+            "xray:UpdateIndexingRule",
+          ],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          // Scoped to the two reserved span log groups the call manages.
+          actions: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutRetentionPolicy"],
+          resources: [
+            `arn:aws:logs:${this.region}:${this.account}:log-group:aws/spans:*`,
+            `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/application-signals/data:*`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          // PutResourcePolicy is account-scoped (no resource-level support), and
+          // DescribeResourcePolicies is needed to read the existing set first.
+          actions: ["logs:PutResourcePolicy", "logs:DescribeResourcePolicies"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          actions: ["application-signals:StartDiscovery"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          // Application Signals needs its service-linked role to exist; GetRole is how
+          // the call checks before creating it.
+          actions: ["iam:CreateServiceLinkedRole"],
+          resources: [
+            "arn:aws:iam::*:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/AWSServiceRoleForCloudWatchApplicationSignals",
+          ],
+          conditions: {
+            StringLike: { "iam:AWSServiceName": "application-signals.cloudwatch.amazonaws.com" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["iam:GetRole"],
+          resources: [
+            "arn:aws:iam::*:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/AWSServiceRoleForCloudWatchApplicationSignals",
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["cloudtrail:CreateServiceLinkedChannel"],
+          resources: ["arn:aws:cloudtrail:*:*:channel/aws-service-channel/application-signals/*"],
+        }),
+      ]) {
+        transactionSearchFn.addToRolePolicy(statement);
+      }
+
+      const transactionSearch = new cdk.CustomResource(this, "TransactionSearchEnable", {
+        serviceToken: transactionSearchFn.functionArn,
+      });
+      // The resource policy must exist first, or X-Ray cannot write the spans it is now
+      // being told to send to CloudWatch Logs.
+      transactionSearch.node.addDependency(spanIngestionPolicy);
+
+      const gatewayTraceSource = new logs.CfnDeliverySource(this, "GatewayTraceSource", {
+        name: `${this.stackName}-gw-traces`,
+        logType: "TRACES",
+        resourceArn: gateway.gatewayArn,
+      });
+      // Traces go to X-Ray, which has no destination resource of its own.
+      const gatewayTraceDestination = new logs.CfnDeliveryDestination(
+        this,
+        "GatewayTraceDestination",
+        { name: `${this.stackName}-gw-traces-dest`, deliveryDestinationType: "XRAY" }
+      );
+      const gatewayTraceDelivery = new logs.CfnDelivery(this, "GatewayTraceDelivery", {
+        deliverySourceName: gatewayTraceSource.name,
+        deliveryDestinationArn: gatewayTraceDestination.attrArn,
+      });
+      gatewayTraceDelivery.node.addDependency(gatewayTraceSource, gatewayTraceDestination);
+      // The XRAY destination is only valid once Transaction Search is ACTIVE, and CFN
+      // cannot infer that edge (nothing references the config), so state it explicitly
+      // rather than relying on creation order.
+      gatewayTraceDestination.node.addDependency(transactionSearch);
+      gatewayTraceDelivery.node.addDependency(transactionSearch);
+    }
+
+    const harnessRole = new iam.Role(this, "ManagementHarnessRole", {
+      assumedBy: new iam.ServicePrincipal("bedrock-agentcore.amazonaws.com", {
+        // Confused-deputy protection: only AgentCore acting on this account's own
+        // resources may assume the execution role.
+        conditions: {
+          StringEquals: { "aws:SourceAccount": this.account },
+          ArnLike: { "aws:SourceArn": `arn:aws:bedrock-agentcore:${this.region}:${this.account}:*` },
+        },
       }),
-      instruction: `You are an AI agent management assistant for an enterprise.
+      description: "Execution role assumed by the FlowAMP management harness.",
+    });
+
+    // Model inference, scoped to the one inference profile plus the underlying
+    // foundation model in every region the profile can route to.
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+        resources: [inferenceProfileArn, `arn:aws:bedrock:*::foundation-model/${baseModelId}`],
+      })
+    );
+    // The harness pulls its application container from ECR Public at session start.
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"],
+        resources: ["*"],
+      })
+    );
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["bedrock-agentcore:InvokeGateway"],
+        resources: [gateway.gatewayArn],
+      })
+    );
+    // AgentCore Memory. A harness enables managed memory BY DEFAULT and provisions
+    // the memory resource itself, named harness_<harnessName>_<suffix>. Without
+    // these actions the very FIRST InvokeHarness fails with AccessDeniedException on
+    // ListEvents, because the harness reads conversation history before it answers.
+    // The sample execution-role policy in the AgentCore docs omits memory entirely
+    // (it treats memory as opt-in), so this has to be granted explicitly.
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "bedrock-agentcore:CreateEvent",
+          "bedrock-agentcore:GetEvent",
+          "bedrock-agentcore:ListEvents",
+          "bedrock-agentcore:DeleteEvent",
+          "bedrock-agentcore:RetrieveMemoryRecords",
+        ],
+        resources: [`arn:aws:bedrock-agentcore:${this.region}:${this.account}:memory/harness_*`],
+      })
+    );
+    // Observability. A harness runs inside AgentCore Runtime, so its logs land under
+    // /aws/bedrock-agentcore/runtimes/*. The metrics and X-Ray actions do not
+    // support resource-level permissions, so those need Resource "*" (PutMetricData
+    // is fenced to the bedrock-agentcore namespace instead).
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["logs:CreateLogGroup", "logs:DescribeLogStreams"],
+        resources: [
+          `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+        ],
+      })
+    );
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["logs:DescribeLogGroups"],
+        resources: [`arn:aws:logs:${this.region}:${this.account}:log-group:*`],
+      })
+    );
+    // Unified span destination: AgentCore delivers the harness's OTEL spans into the
+    // agent's OWN log group (rather than the shared aws/spans group) only if the
+    // execution role can grant X-Ray write access to that group. Without this the
+    // traces still exist, but split away from the logs they belong to.
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["logs:PutResourcePolicy"],
+        resources: [
+          `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+        ],
+      })
+    );
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+        resources: [
+          `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*`,
+        ],
+      })
+    );
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+          "xray:GetSamplingRules",
+          "xray:GetSamplingTargets",
+        ],
+        resources: ["*"],
+      })
+    );
+    harnessRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["cloudwatch:PutMetricData"],
+        resources: ["*"],
+        conditions: { StringEquals: { "cloudwatch:namespace": "bedrock-agentcore" } },
+      })
+    );
+
+    const harness = new agentcore.CfnHarness(this, "ManagementHarness", {
+      // Pattern: ^[a-zA-Z][a-zA-Z0-9_]{0,39}$ — underscores, no hyphens.
+      // AWS::BedrockAgentCore::Harness documents a Description property, but the L1
+      // in the pinned aws-cdk-lib does not expose it yet.
+      harnessName: "flowamp_management_agent",
+      executionRoleArn: harnessRole.roleArn,
+      model: {
+        bedrockModelConfig: {
+          modelId: inferenceProfileId,
+          // Set maxTokens EXPLICITLY. Left unset, Bedrock reserves the model's
+          // maximum output budget per call against the account's token quota, which
+          // throttles far earlier than real usage warrants.
+          maxTokens: 4096,
+        },
+      },
+      // Carried over verbatim from the Classic agent's `instruction`.
+      systemPrompt: [
+        {
+          text: `You are an AI agent management assistant for an enterprise.
 You help operators monitor and manage AI agents deployed across operations,
 asset and infrastructure, finance and trading, security and compliance, and customer operations.
 Use the available tools to fetch real data before responding.`,
-      // Auto-prepare the DRAFT version on deploy. Without this the construct
-      // leaves the agent NOT_PREPARED, so the TSTALIASID test alias the api-handler
-      // invokes returns "agent not found" and chat fails until someone manually
-      // runs prepare-agent. Required for unattended provisioning.
-      shouldPrepareAgent: true,
+        },
+      ],
+      tools: [
+        {
+          // The tool-type enum is lower_snake_case: remote_mcp | agentcore_browser |
+          // agentcore_gateway | inline_function | agentcore_code_interpreter. A
+          // SHOUTING_CASE value is rejected by the AWS::EarlyValidation
+          // ::PropertyValidation hook at change-set time, not at synth.
+          type: "agentcore_gateway",
+          name: "agentManagement",
+          config: {
+            agentCoreGateway: {
+              gatewayArn: gateway.gatewayArn,
+              // The gateway uses SigV4 inbound auth, so the harness calls it with
+              // its own execution-role credentials rather than a stored token.
+              outboundAuth: { awsIam: {} },
+            },
+          },
+        },
+      ],
+      // Restrict the agent to the registry tools served by the gateway. Left unset,
+      // allowedTools defaults to "*", which ALSO exposes the harness's built-in
+      // `shell` and `file_operations` tools (arbitrary command execution in the
+      // session microVM). This agent answers read-only questions about the registry
+      // and has no business running shell commands.
+      allowedTools: ["@agentManagement/*"],
+      // Bound the loop so a runaway reasoning chain cannot burn the account's token
+      // budget. Eight iterations is ample for these read-only lookups.
+      maxIterations: 8,
+      timeoutSeconds: 120,
+      // Per-agent cost-allocation tag, so a Cost Explorer group-by lines up with the
+      // FinOps dashboard's rows.
+      tags: [
+        { key: "AgentId", value: "flowamp-management-agent" },
+        { key: "BusinessUnit", value: "Platform" },
+        { key: "CostCenter", value: "AI-Governance" },
+      ],
     });
-
-    // Override the foundation model ARN to use inference-profile instead of foundation-model
-    const cfnAgent = agent.node.defaultChild as cdk.CfnResource;
-    cfnAgent.addPropertyOverride("FoundationModel", inferenceProfileArn);
-
-    // Grant the agent role permission to use the inference profile. Actions are
-    // explicit (not a bedrock:InvokeModel* wildcard) and resources are scoped to
-    // the exact inference-profile and base-model ARNs — least privilege.
-    agent.role.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream",
-          "bedrock:GetInferenceProfile",
-        ],
-        resources: [
-          inferenceProfileArn,
-          `arn:aws:bedrock:*::foundation-model/${baseModelId}`,
-        ],
-      })
-    );
-
-    agent.addActionGroup(
-      new bedrock.AgentActionGroup({
-        name: "AgentManagement",
-        apiSchema: bedrock.ApiSchema.fromInline(
-          fs.readFileSync(path.join(assetsSrc, "lambda", "agent-handler", "openapi.json"), "utf-8")
-        ),
-        executor: bedrock.ActionGroupExecutor.fromLambda(agentHandlerFn),
-      })
-    );
+    // The harness resolves gateway tools at create time; make the ordering explicit
+    // rather than relying on the gatewayArn reference alone.
+    harness.node.addDependency(gateway);
 
     // ─── AgentCore Runtimes (Strands agents) ───
-    // The management agent + the two governance agents (discovery-scanner,
-    // compliance-scanner) are CORE platform functionality and deploy ALWAYS.
-    // The 3 standalone SAMPLE workload agents (claims-triage, supply-chain,
-    // request-intake) are optional demo content, gated behind deploySampleAgents
-    // (default off). All agents are real AgentCore runtimes (no mock constructs).
+    // The two governance agents (discovery-scanner, compliance-scanner) are CORE
+    // platform functionality and deploy ALWAYS, as AgentCore RUNTIMES: they are real
+    // Python programs and a harness cannot host custom code. The 3 SAMPLE workload
+    // agents (claims-triage, supply-chain, request-intake) are optional demo content
+    // behind deploySampleAgents (default off) and are tool-less HARNESSES.
     {
-      // Imported lazily so the alpha agentcore module is only loaded when used.
+      // Imported lazily so the alpha module is only loaded when used. Only Runtime
+      // comes from alpha; Harness and Gateway are stable in aws-cdk-lib (imported at
+      // the top as `agentcore`), so the two are kept visibly distinct here.
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const agentcore = require("@aws-cdk/aws-bedrock-agentcore-alpha");
+      const agentcoreAlpha = require("@aws-cdk/aws-bedrock-agentcore-alpha");
 
       // Least-privilege model-invocation policy shared by every runtime.
       const modelInvokeStatement = new iam.PolicyStatement({
@@ -440,44 +988,14 @@ Use the available tools to fetch real data before responding.`,
         OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
       };
 
-      // ── Core agents: management + discovery/compliance scanners (always on) ──
-      // ── Management agent (self-contained; own dir) ──
-      const managementRuntime = new agentcore.Runtime(this, "ManagementAgentRuntime", {
-        runtimeName: "managementAgentRuntime",
-        // Direct-code deploy (no Docker). assembleAgentBundle vendors arm64/cp312
-        // dependencies into the bundle (via `uv pip install --python-platform
-        // aarch64-manylinux2014 --target`), per the AWS-documented direct-code
-        // packaging procedure, so the uploaded zip is self-contained.
-        agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
-          path: assembleAgentBundle({
-            agentDir: path.join(assetsSrc, "agents", "agent-runtime"),
-            sharedDir,
-            sharedPackages: [],
-            stagingRoot: bundleStagingRoot,
-            bundleName: "agent-runtime",
-          }),
-          runtime: agentcore.AgentCoreRuntime.PYTHON_3_12,
-          entrypoint: ["main.py"],
-        }),
-        environmentVariables: { AGENT_TABLE_NAME: agentTable.tableName, PORT: "8080", ...observabilityEnv },
-        description: "AI Agent Management Runtime powered by Strands",
-      });
-      agentTable.grantReadData(managementRuntime);
-      managementRuntime.addToRolePolicy(modelInvokeStatement);
-      // Per-agent cost-allocation tag. Applied on the runtime construct (bottom of
-      // the tree) so it beats the stack-level flowamp:agentId=platform tag — Cost
-      // Explorer then attributes this runtime's spend to its own agentId, not the
-      // shared "platform" bucket.
-      cdk.Tags.of(managementRuntime).add(COST_TAG_KEY, "managementAgentRuntime");
-      const managementEndpoint = managementRuntime.addEndpoint("managementAgentEndpoint", {
-        description: "Agent Management API endpoint",
-      });
-      new cdk.CfnOutput(this, "AgentCoreRuntimeArn", { value: managementRuntime.agentRuntimeArn });
-      new cdk.CfnOutput(this, "AgentCoreEndpointArn", {
-        value: managementEndpoint.agentRuntimeEndpointArn,
-      });
-
-      // ── Governance agents (need the shared packages vendored into the bundle) ──
+      // ── Core governance agents: discovery + compliance scanners ──
+      // ON by default; `-c deployGovernanceAgents=false` DISABLES native discovery and
+      // compliance auditing outright (see the flag's declaration above for exactly what
+      // stops working). The management (reasoning) agent is NOT here — it is the
+      // ManagementHarness above. A harness cannot host these two: they are real Python
+      // programs (25 custom tools between them, DynamoDB writes, cross-account
+      // assume-role), whereas a harness only runs a model + prompt + declared tools.
+      if (deployGovernanceAgents) {
       // discovery-scanner: enumerates + LLM-classifies real AgentCore runtimes and
       // writes normalized catalog rows. It OWNS native discovery in this mode.
       const discoveryScannerBundle = assembleAgentBundle({
@@ -487,13 +1005,13 @@ Use the available tools to fetch real data before responding.`,
         stagingRoot: bundleStagingRoot,
         bundleName: "discovery-scanner",
       });
-      const discoveryScanner = new agentcore.Runtime(this, "DiscoveryScannerRuntime", {
+      const discoveryScanner = new agentcoreAlpha.Runtime(this, "DiscoveryScannerRuntime", {
         runtimeName: "flowampDiscoveryScanner",
         // Direct-code deploy: bundle carries main.py, the vendored flowamp_tools
         // package, and all arm64 pip deps (installed by assembleAgentBundle).
-        agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
+        agentRuntimeArtifact: agentcoreAlpha.AgentRuntimeArtifact.fromCodeAsset({
           path: discoveryScannerBundle,
-          runtime: agentcore.AgentCoreRuntime.PYTHON_3_12,
+          runtime: agentcoreAlpha.AgentCoreRuntime.PYTHON_3_12,
           entrypoint: ["main.py"],
         }),
         environmentVariables: {
@@ -527,14 +1045,19 @@ Use the available tools to fetch real data before responding.`,
           ],
         })
       );
-      // Fleet-enumeration + cross-inventory reads. ListAgentRuntimes and
-      // bedrock:ListAgents are list actions that do not support resource-level
-      // permissions, and bedrock:GetAgent inspects the separate Bedrock Agents
-      // inventory. These are read-only, so "*" is required here.
+      // Fleet-enumeration + cross-inventory reads. The List actions do not support
+      // resource-level permissions, and bedrock:GetAgent inspects the separate
+      // Bedrock Agents Classic inventory. These are read-only, so "*" is required.
       discoveryScanner.addToRolePolicy(
         new iam.PolicyStatement({
           actions: [
             "bedrock-agentcore:ListAgentRuntimes",
+            // Harnesses are an execution surface the scanner must enumerate too,
+            // or FlowAMP's own management agent is invisible to the registry it
+            // governs — and the harness would instead be registered under its
+            // backing-runtime name (harness_<name>).
+            "bedrock-agentcore:ListHarnesses",
+            "bedrock-agentcore:GetHarness",
             "bedrock:ListAgents",
             "bedrock:GetAgent",
           ],
@@ -590,13 +1113,13 @@ Use the available tools to fetch real data before responding.`,
         stagingRoot: bundleStagingRoot,
         bundleName: "compliance-scanner",
       });
-      const complianceScanner = new agentcore.Runtime(this, "ComplianceScannerRuntime", {
+      const complianceScanner = new agentcoreAlpha.Runtime(this, "ComplianceScannerRuntime", {
         runtimeName: "flowampComplianceScanner",
         // Direct-code deploy: bundle carries main.py + tools.py, the vendored
         // flowamp_tools + flowamp_compliance_checks packages, and all arm64 deps.
-        agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
+        agentRuntimeArtifact: agentcoreAlpha.AgentRuntimeArtifact.fromCodeAsset({
           path: complianceScannerBundle,
-          runtime: agentcore.AgentCoreRuntime.PYTHON_3_12,
+          runtime: agentcoreAlpha.AgentCoreRuntime.PYTHON_3_12,
           entrypoint: ["main.py"],
         }),
         environmentVariables: {
@@ -634,10 +1157,17 @@ Use the available tools to fetch real data before responding.`,
           actions: [
             "bedrock:GetAgent",
             "bedrock:ListAgents",
+            // Read a Classic agent's aliases: the transparency check reports on
+            // agents a customer still runs on Bedrock Agents Classic.
+            "bedrock:ListAgentAliases",
+            "bedrock:GetAgentAlias",
             "bedrock:GetGuardrail",
             "bedrock:GetModelInvocationLoggingConfiguration",
             "bedrock-agentcore:GetAgentRuntime",
             "bedrock-agentcore:ListAgentRuntimes",
+            // Harnesses are an execution surface the scanner audits too.
+            "bedrock-agentcore:GetHarness",
+            "bedrock-agentcore:ListHarnesses",
             "bedrock-agentcore:ListTagsForResource",
             "cloudwatch:GetMetricStatistics",
             "cloudwatch:DescribeAlarmsForMetric",
@@ -734,7 +1264,7 @@ Use the available tools to fetch real data before responding.`,
         code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "eval-provisioner")),
         environment: {
           EVAL_EXECUTION_ROLE_ARN: evalExecutionRole.roleArn,
-          EVAL_SERVICE_NAMES: "managementAgentRuntime,flowampDiscoveryScanner,flowampComplianceScanner",
+          EVAL_SERVICE_NAMES: "harness_flowamp_management_agent,flowampDiscoveryScanner,flowampComplianceScanner",
         },
         timeout: cdk.Duration.seconds(120),
       });
@@ -819,65 +1349,35 @@ Use the available tools to fetch real data before responding.`,
         description: "Daily compliance audit — one agent per run (oldest lastAuditedAt first)",
       }).addTarget(new targets.LambdaFunction(complianceScanInvokerFn));
 
-      // ── Standalone sample agents (self-contained; real discoverable workloads) ──
+      } // end governance agents (deployGovernanceAgents)
+
+      // ── Standalone sample agents (real discoverable workloads) ──
+      // Tool-less HARNESSES, defined once in ./sample-agents so TeamStack and the
+      // standalone SampleAgentsStack cannot drift apart.
       if (deploySampleAgents) {
-      const sampleAgents: Array<{ id: string; runtimeName: string; dir: string; description: string }> = [
-        {
-          id: "SampleClaimsTriageRuntime",
-          runtimeName: "sampleClaimsTriage",
-          dir: "sample-claims-triage",
-          description: "Sample agent: insurance claims triage assistant",
-        },
-        {
-          id: "SampleSupplyChainRuntime",
-          runtimeName: "sampleSupplyChain",
-          dir: "sample-supply-chain",
-          description: "Sample agent: supply-chain disruption analyst",
-        },
-        {
-          id: "SampleRequestIntakeRuntime",
-          runtimeName: "sampleRequestIntake",
-          dir: "sample-request-intake",
-          description: "Sample agent: service request intake assistant",
-        },
-      ];
-      const sampleArns: string[] = [];
-      for (const s of sampleAgents) {
-        const runtime = new agentcore.Runtime(this, s.id, {
-          runtimeName: s.runtimeName,
-          // Direct-code deploy: self-contained (no _shared), but still needs its
-          // arm64 pip deps (strands, boto3) vendored into the bundle.
-          agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromCodeAsset({
-            path: assembleAgentBundle({
-              agentDir: path.join(assetsSrc, "agents", s.dir),
-              sharedDir,
-              sharedPackages: [],
-              stagingRoot: bundleStagingRoot,
-              bundleName: s.dir,
-            }),
-            runtime: agentcore.AgentCoreRuntime.PYTHON_3_12,
-            entrypoint: ["main.py"],
-          }),
-          environmentVariables: { PORT: "8080", ...observabilityEnv },
-          description: s.description,
+        const sampleArns = SAMPLE_AGENTS.map((def) =>
+          addSampleHarness(this, def, {
+            region: this.region,
+            account: this.account,
+            inferenceProfileId,
+            modelInvokeStatement,
+            costTagKey: COST_TAG_KEY,
+          })
+        );
+        new cdk.CfnOutput(this, "SampleAgentHarnessArns", {
+          value: cdk.Fn.join(",", sampleArns),
+          description: "ARNs of the 3 sample workload harnesses.",
         });
-        runtime.addToRolePolicy(modelInvokeStatement);
-        // Per-agent cost-allocation tag (beats the stack-level 'platform' tag).
-        cdk.Tags.of(runtime).add(COST_TAG_KEY, s.runtimeName);
-        sampleArns.push(runtime.agentRuntimeArn);
-      }
-      new cdk.CfnOutput(this, "SampleAgentRuntimeArns", { value: cdk.Fn.join(",", sampleArns) });
       } // end sample agents (deploySampleAgents)
     } // end AgentCore toolchain block
 
-    // ─── API Gateway: Frontend → Bedrock Agent ───
+    // ─── API Gateway: Frontend → management harness ───
     const apiFn = new lambda.Function(this, "ApiHandlerFn", {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: "index.handler",
       code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "api-handler")),
       environment: {
-        BEDROCK_AGENT_ID: agent.agentId,
-        BEDROCK_AGENT_ALIAS_ID: "TSTALIASID",
+        HARNESS_ARN: harness.attrArn,
         // Live FinOps ledger (Pick 1): after each successful /chat the handler
         // increments today's COST# row + the agent's INFO 'requests' counter.
         AGENT_TABLE_NAME: agentTable.tableName,
@@ -886,10 +1386,17 @@ Use the available tools to fetch real data before responding.`,
       timeout: cdk.Duration.seconds(120),
     });
 
+    // InvokeHarness requires BOTH bedrock-agentcore:InvokeHarness AND
+    // bedrock-agentcore:InvokeAgentRuntime on the harness ARN: a harness is a
+    // managed abstraction over a runtime, and the call authorizes against both
+    // resources. Granting only InvokeHarness yields AccessDenied.
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["bedrock:InvokeAgent"],
-        resources: [`arn:aws:bedrock:${this.region}:${this.account}:agent-alias/${agent.agentId}/*`],
+        actions: [
+          "bedrock-agentcore:InvokeHarness",
+          "bedrock-agentcore:InvokeAgentRuntime",
+        ],
+        resources: [harness.attrArn],
       })
     );
     // Lets the chat handler update_item the COST#/INFO rows for the live ledger.
@@ -916,8 +1423,10 @@ Use the available tools to fetch real data before responding.`,
         // EMF metrics namespace AgentCore publishes evaluator scores under, keyed by
         // evaluator name + config id.
         EVAL_METRIC_NAMESPACE: "Bedrock-AgentCore/Evaluations",
-        // OTEL service.name values (== runtimeName) of the evaluated core runtimes.
-        EVAL_SERVICE_NAMES: "managementAgentRuntime,flowampDiscoveryScanner,flowampComplianceScanner",
+        // OTEL service.name values of the evaluated core agents. For the management agent
+        // this is the harness's BACKING RUNTIME name (harness_<harnessName>), which is what
+        // AgentCore uses for its log group and OTEL service.name — not the harness name.
+        EVAL_SERVICE_NAMES: "harness_flowamp_management_agent,flowampDiscoveryScanner,flowampComplianceScanner",
       },
       timeout: cdk.Duration.seconds(30),
     });
@@ -994,6 +1503,28 @@ Use the available tools to fetch real data before responding.`,
       // Server access logging (Checkov CKV_AWS_18). Logs to a prefix in the same
       // bucket to avoid spawning a second log bucket that trips the same finding.
       serverAccessLogsPrefix: "access-logs/",
+      lifecycleRules: [
+        {
+          // Expire access logs after 7 days.
+          //
+          // This is also a teardown backstop. A server-access-log target keeps
+          // receiving writes while it is being emptied — and because this bucket logs
+          // to ITSELF, the autoDeleteObjects sweep's own DELETE calls generate log
+          // entries that S3 may deliver (delivery is best-effort, minutes to hours)
+          // after the one-shot cleaner has already removed itself. The bucket is then
+          // non-empty when CloudFormation tries to delete it, which fails the whole
+          // teardown. Expiry bounds how much can accumulate if that happens and an
+          // abandoned bucket is left behind.
+          //
+          // If a destroy does fail on this bucket, the unblock is
+          // `aws s3 rm s3://<bucket> --recursive` then re-run the delete. Note that
+          // forcing delete ORDER via DependsOn is not an option: the bucket is its own
+          // log target, so any such edge is a self-reference.
+          id: "expire-access-logs",
+          prefix: "access-logs/",
+          expiration: cdk.Duration.days(7),
+        },
+      ],
     });
 
     const distribution = new cloudfront.Distribution(this, "DemoDistribution", {
@@ -1055,7 +1586,7 @@ Use the available tools to fetch real data before responding.`,
 
     // ─── Data API (REST backend for the UI) ───
     // Read routes the single-page UI calls directly (entity rows from the table).
-    // Kept separate from agent-handler, which serves the Bedrock Agent action group.
+    // Kept separate from agent-handler, which serves the harness's MCP tools.
     // Read+write granted now; write routes also append audit EVENT# rows, and
     // GET /events reads them back (append-only audit log) on this same handler.
     const dataIntegration = new apigateway.LambdaIntegration(dataHandlerFn);
@@ -1151,7 +1682,12 @@ Use the available tools to fetch real data before responding.`,
             // Tells the UI the AgentCore discovery-scanner route exists, so the
             // Discover button targets POST /discovery/scan instead of the Lambda's
             // simulated /discovery/sync.
-            `window.DISCOVERY_SCAN_ENABLED=${discoveryScanInvokerFn ? "true" : "false"};`
+            `window.DISCOVERY_SCAN_ENABLED=${discoveryScanInvokerFn ? "true" : "false"};\n` +
+            // Whether POST /compliance/scan exists. False when
+            // deployGovernanceAgents=false, so the audit buttons can say the feature is
+            // not deployed rather than firing at a route that is not there (API Gateway
+            // answers a missing route with a bare 403, which reads as an auth failure).
+            `window.COMPLIANCE_SCAN_ENABLED=${complianceScanInvokerFn ? "true" : "false"};`
         ),
       ],
       destinationBucket: siteBucket,
@@ -1180,7 +1716,14 @@ Use the available tools to fetch real data before responding.`,
       description: "API Gateway URL (POST /chat)",
     });
     new cdk.CfnOutput(this, "AgentTableName", { value: agentTable.tableName });
-    new cdk.CfnOutput(this, "BedrockAgentId", { value: agent.agentId });
+    new cdk.CfnOutput(this, "ManagementHarnessArn", {
+      value: harness.attrArn,
+      description: "ARN of the AgentCore harness backing POST /chat.",
+    });
+    new cdk.CfnOutput(this, "AgentManagementGatewayArn", {
+      value: gateway.gatewayArn,
+      description: "ARN of the AgentCore Gateway exposing the registry tools to the harness.",
+    });
     new cdk.CfnOutput(this, "LoginUsername", { value: "flowadmin" });
     new cdk.CfnOutput(this, "LoginPassword", { value: seedUser.getAttString("Password") });
     new cdk.CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });

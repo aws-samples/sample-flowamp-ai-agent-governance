@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Discovery Scanner — Strands agent that discovers AgentCore runtimes and maintains the Agent Catalog.
 
 Single-table data model. Audit, work-item, and compliance data all live in the
@@ -299,6 +301,11 @@ def _now_iso() -> str:
 
 _AGENTCORE_RUNTIME_SUFFIX_RE = re.compile(r'-[A-Za-z0-9]{10}$')
 
+# Execution surfaces this scanner can discover. The registry renders the stored
+# string verbatim, so it must match the vocabulary the rest of the platform emits
+# (discovery-handler, the UI's registration dropdown).
+_RUNTIME_LABELS = ('AgentCore Harness', 'AgentCore Runtime')
+
 
 def _runtime_id_from_arn(arn: str) -> str:
     """Extract the agentRuntimeId (the AWS-side identifier, *with* the
@@ -502,19 +509,65 @@ def _attach_model_to_agent(table, agent_id: str, model_id: str) -> None:
 
 @tool
 def list_agent_runtimes() -> str:
-    """List all live AgentCore runtimes from the AgentCore control plane.
+    """List all live AgentCore agents from the AgentCore control plane.
 
-    Returns a JSON list of runtime summaries including ARN, name, and version.
+    Covers BOTH execution surfaces:
+      - harnesses (model + prompt + declared tools; AgentCore runs the loop)
+      - runtimes (your own containerized or direct-code program)
+
+    AgentCore implements a harness AS a runtime, so ListAgentRuntimes also returns
+    the runtime backing each harness, named `harness_<harnessName>`. Those are
+    skipped here: without the skip the same logical agent is registered twice, once
+    under its harness name and once under the backing-runtime name.
+
+    Returns a JSON list of summaries including ARN, name, version, and the
+    `flowampRuntimeLabel` each record should be stored with.
     """
     agentcore_client = boto3.client('bedrock-agentcore-control', region_name=_region)
     agents = []
     next_token = None
 
+    # ── Harnesses first, so their backing runtimes can be excluded below ──
+    harness_backing_names = set()
+    try:
+        harness_token = None
+        while True:
+            kwargs = {} if not harness_token else {'nextToken': harness_token}
+            resp = agentcore_client.list_harnesses(**kwargs)
+            for h in resp.get('harnesses', []):
+                h_name = h.get('harnessName') or h.get('harnessId', '')
+                harness_backing_names.add(f"harness_{h_name}")
+                agents.append({
+                    'agentRuntimeArn': h.get('harnessArn', h.get('arn', '')),
+                    'agentRuntimeId': h.get('harnessId', h_name),
+                    'agentRuntimeName': h_name,
+                    'agentRuntimeVersion': str(h.get('harnessVersion', '') or ''),
+                    'status': h.get('status', ''),
+                    'flowampRuntimeLabel': 'AgentCore Harness',
+                })
+            harness_token = resp.get('nextToken')
+            if not harness_token:
+                break
+        logger.info("list_harnesses: %d harness(es) returned", len(agents))
+    except Exception as exc:
+        # ListHarnesses needs a recent SDK and a region where harnesses exist. A
+        # failure here must not prevent runtime discovery.
+        logger.info("list_harnesses skipped: %s: %s", type(exc).__name__, exc)
+
     for attempt in range(4):
         try:
             kwargs = {} if not next_token else {'nextToken': next_token}
             response = agentcore_client.list_agent_runtimes(**kwargs)
-            agents.extend(response.get('agentRuntimes', response.get('agentRuntimeSummaries', [])))
+            for rt in response.get('agentRuntimes', response.get('agentRuntimeSummaries', [])):
+                rt_name = rt.get('agentRuntimeName') or ''
+                if not rt_name and rt.get('agentRuntimeId'):
+                    rt_name = _AGENTCORE_RUNTIME_SUFFIX_RE.sub('', rt['agentRuntimeId'])
+                # Skip the runtime that merely backs a harness discovered above.
+                if rt_name in harness_backing_names:
+                    logger.info("skipping harness-backing runtime %s", rt_name)
+                    continue
+                rt['flowampRuntimeLabel'] = 'AgentCore Runtime'
+                agents.append(rt)
             next_token = response.get('nextToken')
             if not next_token:
                 break
@@ -604,8 +657,8 @@ def _assign_baseline_framework(table, agent_id: str, now: str) -> None:
 @tool
 def upsert_agent(agent_runtime_arn: str, agent_runtime_name: str,
                  description: str = '', runtime_version: str = '', work_item_id: str = '',
-                 skip_fields: set | None = None) -> str:
-    """Upsert a single discovered runtime into AgentTable.
+                 skip_fields: set | None = None, runtime_label: str = '') -> str:
+    """Upsert a single discovered agent into AgentTable.
 
     New records receive lifecycleStatus='pending-review' so a human reviewer
     can approve them before they enter the active pool.  Re-scans of existing
@@ -613,8 +666,16 @@ def upsert_agent(agent_runtime_arn: str, agent_runtime_name: str,
     omitting it from the UpdateExpression — callers may pass an explicit
     skip_fields set, but 'status' is always skipped on the update path.
 
+    `runtime_label` is the execution surface to store ('AgentCore Harness' or
+    'AgentCore Runtime'), as reported by list_agent_runtimes in
+    `flowampRuntimeLabel`. The registry shows this string verbatim, so it has to
+    match the vocabulary the rest of the platform emits.
+
     Returns JSON with {'isNew': bool, 'agentId': str}.
     """
+    # Default rather than guess: an unlabelled call is most likely a runtime, and a
+    # blank value would render as an empty Runtime column in the registry.
+    runtime_label = runtime_label if runtime_label in _RUNTIME_LABELS else 'AgentCore Runtime'
 
     logger.info(
             'Upserting agent %s',
@@ -1028,6 +1089,10 @@ def _classify_record(arn: str, live_data: dict, existing: dict | None) -> dict:
         'name': _live_name or _derived_id,
         'description': live_data.get('description', '') or existing.get('description', ''),
         'runtimeVersion': live_data.get('agentRuntimeVersion', ''),
+        # Execution surface, set by list_agent_runtimes according to which control-plane
+        # API returned this agent. Carried through the scan so commit_discovery_scan can
+        # store it without re-deriving it.
+        'runtimeLabel': live_data.get('flowampRuntimeLabel', 'AgentCore Runtime'),
         # The LLM may fill in any of these via set_enrichment_fields. Pre-seed
         # with whatever the existing row already has so the LLM sees them.
         'displayName': existing.get('displayName', ''),
@@ -1515,6 +1580,12 @@ def commit_discovery_scan(work_item_id: str = '') -> str:
             # runtimeId is the full ARN stored on the record; agent_id is the
             # canonical clean name (AgentTable PK) stored as the records dict key.
             arn = record['runtimeId']
+            # Execution surface for this agent, set during stage 1 by whichever
+            # control-plane API returned it. Fall back rather than trust the record,
+            # since rows carried over from an earlier scanner version will not have it.
+            runtime_label = record.get('runtimeLabel')
+            if runtime_label not in _RUNTIME_LABELS:
+                runtime_label = 'AgentCore Runtime'
 
             cost_center = _read_cost_center_tag(arn)
             _write_agent_tags(arn, record['name'], cost_center)
@@ -1534,11 +1605,10 @@ def commit_discovery_scan(work_item_id: str = '') -> str:
                     # starts as False; the probe loop below flips it to True for
                     # IAM-auth runtimes after the row exists.
                     'platformId': _BEDROCK_PLATFORM_ID,
-                    # Human-facing display fields the UI registry renders. These are
-                    # AgentCore runtimes (NOT plain Bedrock Agents), so label the
-                    # runtime/platform/system accordingly rather than leaving them
-                    # blank (which the UI would show as an empty runtime column).
-                    'runtime': 'AgentCore (Strands)',
+                    # Human-facing display fields the UI registry renders. The
+                    # runtime label distinguishes a harness from a runtime, and must
+                    # not be left blank (the UI would show an empty Runtime column).
+                    'runtime': runtime_label,
                     'platform': 'native',
                     'system': 'Amazon Bedrock AgentCore',
                     # Default category so the registry list never shows a blank —
@@ -1608,9 +1678,11 @@ def commit_discovery_scan(work_item_id: str = '') -> str:
             if record['_existing'].get('platform') != 'native':
                 update_parts.append('platform = :platform')
                 expr_vals[':platform'] = 'native'
-            if record['_existing'].get('runtime') != 'AgentCore (Strands)':
+            # This also migrates rows written by an earlier scanner version, which
+            # stored the retired label 'AgentCore (Strands)'.
+            if record['_existing'].get('runtime') != runtime_label:
                 update_parts.append('runtime = :runtime')
-                expr_vals[':runtime'] = 'AgentCore (Strands)'
+                expr_vals[':runtime'] = runtime_label
             if record['_existing'].get('system') != 'Amazon Bedrock AgentCore':
                 update_parts.append('#sys = :system')
                 expr_vals[':system'] = 'Amazon Bedrock AgentCore'

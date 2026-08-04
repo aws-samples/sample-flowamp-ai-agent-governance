@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Compliance helpers — read/write path for audit reports, RAI scores, notes,
 per-agent framework assignments, and compliance events.
 

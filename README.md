@@ -13,21 +13,36 @@ called out below, and extend the connectors/policies for your environment.
 
 A single DynamoDB table is the spine. Governance is **agent-driven**: AgentCore (Strands) agents
 discover, classify, and audit the account's other agents, writing normalized records to the table.
-A Bedrock Agent answers natural-language questions over it, scheduled Lambdas keep the inventory /
-Responsible-AI scores / cost current, and a static UI (S3 + CloudFront) talks to the backend
-through a Cognito-authorized API Gateway.
+An AgentCore harness answers natural-language questions over it, scheduled Lambdas keep the
+inventory / Responsible-AI scores / cost current, and a static UI (S3 + CloudFront) talks to the
+backend through a Cognito-authorized API Gateway.
 
-![FlowAMP architecture - chat flows from the CloudFront UI through API Gateway and the Bedrock Agent to a single DynamoDB table, with scheduled discovery and RAI-scoring Lambdas](static/images/flowamp-architecture.png)
+![FlowAMP architecture - chat flows from the CloudFront UI through API Gateway and the AgentCore harness to a single DynamoDB table, with scheduled discovery and RAI-scoring Lambdas](static/images/flowamp-architecture.png)
+
+Agents are deployed two ways, and the distinction matters when adding your own:
+
+- **Harness** (`AWS::BedrockAgentCore::Harness`) - model, system prompt and tools declared as
+  configuration; AgentCore runs the agent loop. No container, no code bundle. Used for the
+  management agent and the sample workloads.
+- **Runtime** (`agentcore.Runtime`, direct-code deploy) - your own Python program, packaged as a
+  zip with its arm64 dependencies vendored in at synth time by `cdk/lib/agent-bundle.ts`. Used for
+  the two scanners, which have custom tools, DynamoDB writes and cross-account calls that a
+  harness cannot host.
+
+> **Bedrock Agents Classic is not used.** It [entered maintenance mode on 2026-07-30](https://docs.aws.amazon.com/bedrock/latest/userguide/agents-classic-maintenance-mode.html):
+> `CreateAgent` is refused in any account without prior Bedrock Agents usage, so a stack that
+> created one could not deploy into a new account. FlowAMP still **discovers and audits** Classic
+> agents you already run, since the read APIs remain available and existing agents keep working.
 
 | Component | Purpose |
 |---|---|
 | **DynamoDB** `AgentTable` | Single table (PK `agentId`, SK `sk`, PAY_PER_REQUEST, 90-day TTL on `EVENT#` rows). Row types by `sk`: `INFO` (entity), `EVENT#`/`AUDIT#`/`RAI#`/`COST#`/`REVIEW#`/`MODEL#`/`COMPLIANCE#`. |
-| **AgentCore: management agent** | Strands agent that answers questions over the table. **Core - always deployed.** |
+| **AgentCore harness: management agent** | Managed agent loop that answers questions over the table, calling the registry tools through the Gateway below. Model via an inference profile (`us.anthropic.claude-sonnet-4-6`). **Core - always deployed.** |
 | **AgentCore: `discovery-scanner`** | Governance agent that enumerates AND LLM-classifies the account's AgentCore runtimes, writing enriched catalog rows. **Owns single-account native discovery. Core - always deployed.** |
 | **AgentCore: `compliance-scanner`** | Governance agent that runs a deterministic compliance-checks framework (baseline / NIST AI RMF / ISO 27001 / SOC 2 / NERC-CIP) plus LLM judgment, writing `AUDIT#` / `RAI#` rows. **Core - always deployed.** |
-| **AgentCore: 3 sample agents** | Optional real customer-use-case Strands agents (insurance claims triage, supply-chain analyst, service request intake) that give discovery genuine agents to find. `deploySampleAgents=true`. |
-| **Bedrock Agent** | Foundation model via an inference profile (`us.anthropic.claude-sonnet-4-6`); action group defined by `assetsSrc/lambda/agent-handler/openapi.json`. |
-| **Lambda `agent-handler`** | Bedrock Agent action-group backend; serves the OpenAPI endpoints. |
+| **AgentCore: 3 sample agents** | Optional customer-use-case harnesses (insurance claims triage, supply-chain analyst, service request intake) that give discovery genuine agents to find. Defined in `cdk/lib/sample-agents.ts`, shared with `SampleAgentsStack`. `deploySampleAgents=true`. |
+| **AgentCore Gateway** | Exposes the `agent-handler` Lambda's eight read operations to the harness as MCP tools, with SigV4 inbound auth. Replaces what was a Bedrock Agent action group. |
+| **Lambda `agent-handler`** | Registry read API behind the Gateway. Speaks both the Gateway/MCP shape and the legacy action-group shape, so it stays independently testable. |
 | **Lambda `discovery-handler`** | External connectors (Microsoft/Okta/MuleSoft - simulated) + real cross-account **org discovery**. Runs every 6h and on API routes. Async fire-and-forget for multi-account scans. |
 | **Lambda `discovery-scan-invoker`** | Bridges the UI **Discover** button to the `discovery-scanner` runtime (which has no API of its own). Backs `POST /discovery/scan`. |
 | **Lambda `compliance-scan-invoker`** | Bridges the UI **Run audit** / daily schedule to the `compliance-scanner` runtime. Fire-and-forget (202 + async self-invoke) since an audit exceeds API Gateway's 29s. Backs `POST /compliance/scan`. |
@@ -35,7 +50,7 @@ through a Cognito-authorized API Gateway.
 | **Lambda `finops-collector`** | Daily Cost Explorer pull, real per-agent spend by the `flowamp:agentId` tag → `COST#` rows. |
 | **Lambda `cost-tag-activator`** | CFN custom resource that best-effort activates the `flowamp:agentId` cost-allocation tag (management/payer account only). |
 | **Lambda `rai-scorer`** | Daily job computing Responsible-AI scores from CloudWatch + CloudTrail signals. |
-| **Lambda `api-handler`** | API Gateway `POST /chat` → invokes the Bedrock Agent. |
+| **Lambda `api-handler`** | API Gateway `POST /chat` → `InvokeHarness`. Returns the answer plus a per-chat trace (which tools the agent called, real token counts). |
 | **Lambda `data-handler`** | REST backend for the UI's data/read + write routes (register, lifecycle, events, costs, compliance audits, evaluation scores + readiness). |
 | **Lambda `seed-data`** | CFN custom resource that seeds a demo catalog. Gated off by default (`seedSampleData`). |
 | **Lambda `cognito-seed-user`** | Seeds the single demo UI user (`flowadmin`) - replace for production (see hardening). |
@@ -63,16 +78,41 @@ CDK context flags (`-c <flag>=value`):
 |---|---|---|
 | `enableOrgDiscovery` | **`true`** | Cross-account org discovery: `organizations:ListAccounts` → assume a role per member account → list Bedrock Agents + AgentCore runtimes per region. **Requires FlowAMP to run in the org management or a delegated-admin account** (otherwise it returns nothing and surfaces a UI warning). Assumed role defaults to `AWSControlTowerExecution` - override with `-c orgDiscoveryRoleName=…`; regions with `-c orgDiscoveryRegions=us-east-1,us-west-2` (defaults to the stack region). |
 | `enableCostExplorer` | **`true`** | Deploys `finops-collector` + the cost-allocation-tag activator. Real spend appears only after the `flowamp:agentId` tag is activated in Billing and CE backfills (~24-48h) - see [FinOps](#finops-real-cost-from-cost-explorer). |
-| `deploySampleAgents` | `false` | Deploy 3 sample workload agents as real, discoverable AgentCore runtimes. |
+| `deploySampleAgents` | `false` | Deploy 3 sample workload agents as real, discoverable AgentCore harnesses. |
 | `seedSampleData` | `false` | Load a demo agent catalog (`source: demo-seed`) + simulated external connectors, for a populated UI without real agents. |
+| `enableTransactionSearch` | `false` | Adds distributed **traces** for the Gateway's tool calls, on top of the request/response logs that are delivered either way. Off by default because enabling it is an **account-wide** change that moves span ingestion onto CloudWatch pricing (1% of spans indexed free) - see [Enable Transaction Search](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html). Safe to re-run where it is already on, and never disabled on stack delete. |
+| `deployGovernanceAgents` | **`true`** | The `discovery-scanner` + `compliance-scanner` runtimes. Setting `=false` **disables the features they provide, not just their provisioning**: native agent discovery and compliance auditing both stop (see below). It is the only way to drop the `uv` prerequisite, since these are the only components needing a code bundle. |
 
-> **Packaging - `uv` required.** The core AgentCore agents deploy on every `cdk deploy`,
-> so [`uv`](https://docs.astral.sh/uv/) must be on the machine that runs synth/deploy. The runtimes
-> use AgentCore **direct code deployment** (Lambda-style shared responsibility: AWS provides the
-> Python runtime, you package the deps). At synth time `cdk/lib/agent-bundle.ts` vendors each agent's
+> **Turning off `deployGovernanceAgents` removes capability, not just cost.** With
+> `-c deployGovernanceAgents=false`:
+>
+> - **Native discovery stops.** Nothing enumerates this account's own AgentCore agents. The
+>   `discovery-handler` Lambda's native pass is deliberately disabled whenever the scanner owns
+>   discovery, so the registry is then filled only by the external connectors, cross-account org
+>   discovery, and manual registration.
+> - **Compliance auditing stops.** No `AUDIT#` / `RAI#` rows are ever written, so the Compliance view
+>   and each agent's audit history stay empty, and the daily rotation audit does not run.
+> - **Those two agents cannot be evaluated.** Their online-evaluation configs cannot be created; the
+>   management harness's still can.
+>
+> Chat, the registry, FinOps, Responsible-AI scoring, AOPs and the access matrix are unaffected. The
+> UI detects both cases and disables the Discover / Run audit controls rather than calling routes that
+> do not exist. Deploy without the flag (or `=true`) to get the full platform.
+
+> **Packaging - `uv` required.** The two scanner *runtimes* deploy on every `cdk deploy`, so
+> [`uv`](https://docs.astral.sh/uv/) must be on the machine that runs synth/deploy. They use
+> AgentCore **direct code deployment** (Lambda-style shared responsibility: AWS provides the Python
+> runtime, you package the deps). At synth time `cdk/lib/agent-bundle.ts` vendors each one's
 > `requirements.txt` for linux/arm64 + cp312 (`uv pip install --python-platform aarch64-manylinux2014
 > --target <bundle>`) and copies in the shared `flowamp_tools` / `flowamp_compliance_checks`
 > packages, so the uploaded zip is self-contained. **Docker is not required.**
+>
+> The *harnesses* (management agent, sample agents) need no packaging at all - they are pure
+> configuration - so nothing is bundled for them. Watch the bundle size if you add dependencies to a
+> scanner: direct-code packages are capped at
+> [250 MB compressed / 750 MB uncompressed](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html),
+> neither adjustable, and the uncompressed limit is the one that binds in practice (the current
+> bundles sit near 170 MB unzipped, mostly ADOT and the Strands tool extras).
 
 ## Agentic discovery
 
@@ -81,8 +121,11 @@ other agents:
 
 1. **Trigger.** The UI **Discover** button → `POST /discovery/scan` → `discovery-scan-invoker`
    invokes the scanner runtime (`InvokeAgentRuntime`).
-2. **Discover.** The scanner enumerates the account's AgentCore runtimes
-   (`bedrock-agentcore:ListAgentRuntimes`) and classifies each as new / enrich / refresh / inactivate.
+2. **Discover.** The scanner enumerates the account's AgentCore agents — harnesses
+   (`ListHarnesses`) and runtimes (`ListAgentRuntimes`) — and classifies each as new / enrich /
+   refresh / inactivate. AgentCore implements a harness *as* a runtime, so each harness also appears
+   in `ListAgentRuntimes` under a `harness_<name>` backing name; those are skipped so one logical
+   agent yields one registry row under its real name.
 3. **Classify (the agentic part).** For new/under-described agents it uses an LLM to infer
    `displayName`, `category`, `riskTier`, `capabilities`, `suggestedOwner` - and can invoke an agent
    to ask what it does. Machine-inferred rows are flagged `aiInferred: true` and land as
@@ -91,8 +134,9 @@ other agents:
    rows to the single `AgentTable`.
 
 **Cross-account org discovery** (the `discovery-handler` Lambda) applies the same idea across the
-organization: enumerate accounts, assume a role in each, list both Bedrock Agents and AgentCore
-runtimes per region, and upsert them keyed `native:<account>:<region>:agentcore:<name>`. Because a
+organization: enumerate accounts, assume a role in each, list AgentCore harnesses and runtimes plus
+any legacy Bedrock Agents Classic agents per region, and upsert them keyed
+`native:<account>:<region>:<harness|agentcore|bedrock-agent>:<name>`. Because a
 multi-account scan can exceed API Gateway's 29 s limit, the sync is **fire-and-forget** (returns
 `202`, runs in a background self-invoke) and the UI polls the registry for results.
 
@@ -101,6 +145,8 @@ The **`compliance-scanner`** follows the same pattern for governance: it runs th
 compliance and Responsible-AI surfaces read back. It audits **one agent per invocation** - triggered
 on demand (the UI **Run audit** / **Audit all agents** buttons → `POST /compliance/scan`, via the
 `compliance-scan-invoker`) or on a daily EventBridge schedule (rotation: the oldest-audited agent).
+Rotation considers every eligible agent by default; add `FLOWAMP_PLATFORMS` rows flagged
+`auditable=true` to restrict it to specific platforms.
 
 ## Evaluations: AgentCore-native agent scoring
 
@@ -177,13 +223,13 @@ npx cdk deploy
 ```
 
 Stack outputs include `DemoUrl` (CloudFront UI), `ApiUrl`, `LoginUsername`/`LoginPassword` (seeded),
-`AgentTableName`, `BedrockAgentId`, `UserPoolId`, and `DiscoveryScannerRuntimeArn` /
-`ComplianceScannerRuntimeArn`.
+`AgentTableName`, `ManagementHarnessArn`, `AgentManagementGatewayArn`, `UserPoolId`, and
+`DiscoveryScannerRuntimeArn` / `ComplianceScannerRuntimeArn`.
 
 ### Optional add-ons
 
 ```bash
-npx cdk deploy -c deploySampleAgents=true       # 3 sample agents (adds SampleAgentRuntimeArns)
+npx cdk deploy -c deploySampleAgents=true       # 3 sample agents (adds SampleAgentHarnessArns)
 npx cdk deploy -c seedSampleData=true           # demo catalog + simulated connectors
 npx cdk deploy -c enableOrgDiscovery=false      # turn OFF cross-account org discovery
 npx cdk deploy -c enableCostExplorer=false      # turn OFF the FinOps collector
@@ -222,6 +268,13 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
 - **RAI / history-dependent checks:** `rai-scorer` and some compliance checks derive from CloudWatch /
   CloudTrail; in a fresh account they return **skip** and scores sit at base values until traffic
   accrues.
+- **FinOps needs the cost-allocation tag activated.** Until `flowamp:agentId` is activated in Billing
+  and Cost Explorer backfills (~24-48h), `finops-collector` runs cleanly and writes nothing
+  (`reason: ce-empty`). The FinOps view is empty until then; it is not a failure.
+- **Guardrail-dependent RAI signals need a `guardrailArn`.** Fairness and ethics read
+  `AWS/Bedrock/Guardrails` → `InvocationsIntervened`, which is dimensioned by guardrail, not by agent.
+  An agent with no attached guardrail produces no datapoints, so the scorer preserves its existing
+  score rather than inventing one.
 
 ## Repository layout
 
@@ -232,18 +285,18 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
 │   ├── bin/sample-agents.ts      # Standalone app → SampleAgentsStack (samples only, no platform)
 │   ├── lib/team-stack.ts         # The full FlowAMP stack
 │   ├── lib/sample-agents-stack.ts# Standalone 3-sample-agent stack (for a separate account)
-│   ├── lib/agent-bundle.ts       # Synth-time uv vendoring of each agent's arm64 deps
+│   ├── lib/sample-agents.ts      # The 3 sample harness definitions (shared by both stacks)
+│   ├── lib/agent-bundle.ts       # Synth-time uv vendoring of the scanner runtimes' arm64 deps
 │   └── README.md                 # Deploy details
 ├── assetsSrc/                    # Sources packaged as CDK assets
 │   ├── lambda/                   # agent-handler, api-handler, data-handler, discovery-handler,
 │   │                             #   discovery-scan-invoker, compliance-scan-invoker, eval-provisioner,
 │   │                             #   finops-collector, cost-tag-activator, rai-scorer, seed-data,
 │   │                             #   cognito-seed-user
-│   ├── agents/                   # AgentCore Strands agents (3 core always-on + 3 optional samples)
-│   │   ├── agent-runtime/             # Management agent
+│   ├── agents/                   # Source for the AgentCore RUNTIME agents only — the
+│   │                             #   harnesses (management, samples) are pure config in CDK
 │   │   ├── discovery-scanner/         # Governance: discover + classify agents
 │   │   ├── compliance-scanner/        # Governance: deterministic checks + RAI grading
-│   │   ├── sample-{claims-triage,supply-chain,request-intake}/  # Sample workloads
 │   │   └── _shared/                   # flowamp_tools + flowamp_compliance_checks (vendored at synth)
 │   └── site/                     # The static UI served via CloudFront
 ├── docs/developer-guides/        # Standalone HTML deep-dives per subsystem (NOT deployed)

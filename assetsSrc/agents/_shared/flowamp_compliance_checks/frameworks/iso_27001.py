@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """ISO 27001 framework template.
 
 Focuses on information security controls. VPC isolation and tagging are elevated

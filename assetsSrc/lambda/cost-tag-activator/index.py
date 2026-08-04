@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """CloudFormation custom resource — activate the flowamp:agentId cost-allocation tag.
 
 Cost Explorer only groups by a user-defined tag once that tag key is ACTIVATED as a

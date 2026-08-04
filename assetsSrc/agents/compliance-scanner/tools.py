@@ -1,3 +1,5 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 """Compliance Auditor tool surface — the U-081/U-091 agentic auditor.
 
 Tool classification:
@@ -304,15 +306,28 @@ def stamp_agent_last_audited(agent_id: str, ts: str) -> None:
 
 # ── Eligibility filter ────────────────────────────────────────────────────────
 
-def _eligible_for_audit(agent_record: dict) -> bool:
-    """Return True when the agent record should be audited this run.
+# Non-agent entities that share the AgentTable and also use sk='INFO':
+# compliance frameworks, Agent Operating Policies, and access-matrix rows. The
+# same prefix tuple is used by agent-handler, data-handler, discovery-handler and
+# rai-scorer to separate agents from other entities in a Scan.
+_NON_AGENT_PREFIXES = ("compliance:", "aop:", "access:")
 
-    Skips FLOWAMP_ sentinel rows and terminally-lifecycle'd agents.
-    Matches U-080 AC-5 filter exactly.
+
+def _eligible_for_audit(agent_record: dict) -> bool:
+    """Return True when the record is an agent that should be audited this run.
+
+    Skips FLOWAMP_ sentinel rows, non-agent entities that share the table, and
+    terminally-lifecycle'd agents.
     """
     agent_id = agent_record.get("agentId", "")
     status = agent_record.get("status", "")
     if agent_id.startswith("FLOWAMP_"):
+        return False
+    # Not agents: auditing e.g. compliance:nist-sp800-37 produces a nonsense
+    # report about a framework definition. This used to be masked by the
+    # platformId filter in _pick_rotation_target (these rows carry no
+    # platformId), so it only surfaced once selection stopped requiring one.
+    if agent_id.startswith(_NON_AGENT_PREFIXES):
         return False
     if status in ("decommissioned", "rejected"):
         return False
