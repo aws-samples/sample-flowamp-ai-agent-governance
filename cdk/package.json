@@ -17,7 +17,11 @@
   },
   "dependencies": {
     "@aws-cdk/aws-bedrock-agentcore-alpha": "2.243.0-alpha.0",
-    "aws-cdk-lib": "2.260.0",
+    "aws-cdk-lib": "2.263.0",
     "constructs": "10.6.0"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.9",
+    "fast-uri": "^3.1.5"
   }
 }

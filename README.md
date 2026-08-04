@@ -17,7 +17,7 @@ An AgentCore harness answers natural-language questions over it, scheduled Lambd
 inventory / Responsible-AI scores / cost current, and a static UI (S3 + CloudFront) talks to the
 backend through a Cognito-authorized API Gateway.
 
-![FlowAMP architecture - chat flows from the CloudFront UI through API Gateway and the AgentCore harness to a single DynamoDB table, with scheduled discovery and RAI-scoring Lambdas](static/images/flowamp-architecture.png)
+![FlowAMP architecture - chat flows from the CloudFront UI through API Gateway to the AgentCore harness, which reaches the agent-handler Lambda as MCP tools through an AgentCore Gateway; a single DynamoDB table is the data spine, written by the governance agents and by scheduled discovery, RAI-scoring and FinOps Lambdas](static/images/flowamp-architecture.png)
 
 Agents are deployed two ways, and the distinction matters when adding your own:
 
@@ -300,7 +300,8 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
 │   │   └── _shared/                   # flowamp_tools + flowamp_compliance_checks (vendored at synth)
 │   └── site/                     # The static UI served via CloudFront
 ├── docs/developer-guides/        # Standalone HTML deep-dives per subsystem (NOT deployed)
-└── static/images/                # Architecture diagram
+├── docs/diagrams/                # Editable draw.io source for the architecture diagram
+└── static/images/                # Rendered architecture diagram (PNG)
 ```
 
 ## Developer guides

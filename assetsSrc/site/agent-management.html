@@ -2687,8 +2687,8 @@ function renderFinOps() {
         const x2=cx+r*Math.cos(a2-Math.PI/2), y2=cy+r*Math.sin(a2-Math.PI/2);
         const x3=cx+r2*Math.cos(a2-Math.PI/2), y3=cy+r2*Math.sin(a2-Math.PI/2);
         const x4=cx+r2*Math.cos(a1-Math.PI/2), y4=cy+r2*Math.sin(a1-Math.PI/2);
-        donutPaths+=`<path class="fin-donut-hover fin-donut-segment" style="animation-delay:${idx*0.1}s" d="M${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} L${x3},${y3} A${r2},${r2} 0 ${large} 0 ${x4},${y4} Z" fill="${color}" opacity="0.85" stroke="#1a2332" stroke-width="1.5" onclick="drillDonut('${cat.replace(/'/g,"\\'")}')"><title>${cat}: $${cost.toLocaleString()} (${Math.round(pct*100)}%)</title></path>`;
-        legendHtml+=`<div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:3px;cursor:pointer;padding:2px 4px;border-radius:4px;transition:background 0.15s" onclick="drillDonut('${cat.replace(/'/g,"\\'")}')" onmouseenter="this.style.background='#2a3d52'" onmouseleave="this.style.background='transparent'"><div style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0"></div><span style="color:#dee4ea;flex:1">${cat}</span><span style="color:#edf0f4;font-weight:600">$${cost.toLocaleString()}</span><span style="color:#9aacbe">${Math.round(pct*100)}%</span></div>`;
+        donutPaths+=`<path class="fin-donut-hover fin-donut-segment" style="animation-delay:${idx*0.1}s" d="M${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} L${x3},${y3} A${r2},${r2} 0 ${large} 0 ${x4},${y4} Z" fill="${color}" opacity="0.85" stroke="#1a2332" stroke-width="1.5" data-fin-cat="${esc(cat)}"><title>${cat}: $${cost.toLocaleString()} (${Math.round(pct*100)}%)</title></path>`;
+        legendHtml+=`<div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:3px;cursor:pointer;padding:2px 4px;border-radius:4px;transition:background 0.15s" data-fin-cat="${esc(cat)}" onmouseenter="this.style.background='#2a3d52'" onmouseleave="this.style.background='transparent'"><div style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0"></div><span style="color:#dee4ea;flex:1">${cat}</span><span style="color:#edf0f4;font-weight:600">$${cost.toLocaleString()}</span><span style="color:#9aacbe">${Math.round(pct*100)}%</span></div>`;
         angle=a2;
     });
     donutPaths+=`<text x="${cx}" y="${cy-4}" text-anchor="middle" fill="#edf0f4" font-size="16" font-weight="800" class="fin-animate-in" style="animation-delay:0.6s">$${(total/1000).toFixed(1)}K</text><text x="${cx}" y="${cy+12}" text-anchor="middle" fill="#9aacbe" font-size="11" class="fin-animate-in" style="animation-delay:0.7s">TOTAL/MO</text>`;
@@ -2696,6 +2696,19 @@ function renderFinOps() {
     donutSvg.innerHTML=donutPaths;
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('finDonutLegend').innerHTML=legendHtml;
+    // Category comes from a data attribute read back via dataset, not from an inline
+    // onclick built by string interpolation. Interpolating a value into an onclick means
+    // hand-escaping it as JavaScript source, and the previous `replace(/'/g, "\\'")` did
+    // not escape backslashes — so a category containing one could terminate the string
+    // literal and inject code (CodeQL js/incomplete-sanitization). A data attribute is
+    // HTML-escaped by esc() and is never parsed as JavaScript.
+    for (const el of [donutSvg, document.getElementById('finDonutLegend')]) {
+        if (!el) continue;
+        el.onclick = (ev) => {
+            const t = ev.target.closest('[data-fin-cat]');
+            if (t) drillDonut(t.dataset.finCat);
+        };
+    }
     // Chargeback table
     const buMap={"Operations":"Operations BU","Asset & Infrastructure":"Asset & Infra BU","Finance & Trading":"Finance BU","Security & Compliance":"Security BU","Customer Operations":"Customer BU","External Platforms":"Shared Services"};
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
@@ -3991,7 +4004,7 @@ function dsRunExperiment(){
                 <div class="catalog-stat"><div class="stat-number green">${passed}</div><div class="stat-label">Passed (≥70%)</div></div>
                 <div class="catalog-stat"><div class="stat-number red">${failed}</div><div class="stat-label">Failed</div></div>
                 <div class="catalog-stat"><div class="stat-number blue">${avg}%</div><div class="stat-label">Avg Score</div></div>
-                <div class="catalog-stat"><div class="stat-number purple">${ver}</div><div class="stat-label">Version</div></div>
+                <div class="catalog-stat"><div class="stat-number purple">${esc(ver)}</div><div class="stat-label">Version</div></div>
             </div>`;
             html+=`<table style="width:100%;border-collapse:collapse;font-size:12px;background:#0d1117;border:1px solid #2e4058;border-radius:8px;overflow:hidden">
                 <thead><tr style="background:#0a0e14">
@@ -4041,8 +4054,8 @@ function dsRunCompare(){
     const same=d.count-regressions-improvements;
 
     let html=`<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:16px">
-        <div class="catalog-stat"><div class="stat-number" style="color:#a371f7">${avgA}%</div><div class="stat-label">Avg ${va}</div></div>
-        <div class="catalog-stat"><div class="stat-number" style="color:#58a6ff">${avgB}%</div><div class="stat-label">Avg ${vb}</div></div>
+        <div class="catalog-stat"><div class="stat-number" style="color:#a371f7">${avgA}%</div><div class="stat-label">Avg ${esc(va)}</div></div>
+        <div class="catalog-stat"><div class="stat-number" style="color:#58a6ff">${avgB}%</div><div class="stat-label">Avg ${esc(vb)}</div></div>
         <div class="catalog-stat"><div class="stat-number green">${improvements}</div><div class="stat-label">Improved</div></div>
         <div class="catalog-stat"><div class="stat-number red">${regressions}</div><div class="stat-label">Regressed</div></div>
         <div class="catalog-stat"><div class="stat-number" style="color:#9aacbe">${same}</div><div class="stat-label">Unchanged</div></div>
@@ -4050,19 +4063,19 @@ function dsRunCompare(){
     // Verdict
     const diff=(parseFloat(avgA)-parseFloat(avgB)).toFixed(1);
     if(diff>0){
-        html+=`<div style="padding:10px 16px;background:#0d2818;border:1px solid #3fb950;border-radius:8px;margin-bottom:16px;font-size:13px;color:#3fb950;font-weight:600">▲ ${va} outperforms ${vb} by ${diff} points — ${improvements} examples improved, ${regressions} regressed</div>`;
+        html+=`<div style="padding:10px 16px;background:#0d2818;border:1px solid #3fb950;border-radius:8px;margin-bottom:16px;font-size:13px;color:#3fb950;font-weight:600">▲ ${esc(va)} outperforms ${esc(vb)} by ${diff} points — ${improvements} examples improved, ${regressions} regressed</div>`;
     } else if(diff<0){
-        html+=`<div style="padding:10px 16px;background:#2d1117;border:1px solid #f85149;border-radius:8px;margin-bottom:16px;font-size:13px;color:#f85149;font-weight:600">▼ ${va} underperforms ${vb} by ${Math.abs(diff)} points — ⚠ ${regressions} regressions detected</div>`;
+        html+=`<div style="padding:10px 16px;background:#2d1117;border:1px solid #f85149;border-radius:8px;margin-bottom:16px;font-size:13px;color:#f85149;font-weight:600">▼ ${esc(va)} underperforms ${esc(vb)} by ${Math.abs(diff)} points — ⚠ ${regressions} regressions detected</div>`;
     } else {
-        html+=`<div style="padding:10px 16px;background:#1c1c00;border:1px solid #d29922;border-radius:8px;margin-bottom:16px;font-size:13px;color:#d29922;font-weight:600">⚖ No significant difference between ${va} and ${vb}</div>`;
+        html+=`<div style="padding:10px 16px;background:#1c1c00;border:1px solid #d29922;border-radius:8px;margin-bottom:16px;font-size:13px;color:#d29922;font-weight:600">⚖ No significant difference between ${esc(va)} and ${esc(vb)}</div>`;
     }
     // Per-example comparison table
     html+=`<table style="width:100%;border-collapse:collapse;font-size:12px;background:#0d1117;border:1px solid #2e4058;border-radius:8px;overflow:hidden">
         <thead><tr style="background:#0a0e14">
             <th style="padding:8px 14px;text-align:left;color:#8b95a1">Example</th>
             <th style="padding:8px 14px;text-align:left;color:#8b95a1">Input</th>
-            <th style="padding:8px 10px;text-align:center;color:#a371f7">${va}</th>
-            <th style="padding:8px 10px;text-align:center;color:#58a6ff">${vb}</th>
+            <th style="padding:8px 10px;text-align:center;color:#a371f7">${esc(va)}</th>
+            <th style="padding:8px 10px;text-align:center;color:#58a6ff">${esc(vb)}</th>
             <th style="padding:8px 14px;text-align:center;color:#8b95a1">Delta</th>
             <th style="padding:8px 14px;text-align:center;color:#8b95a1">Status</th>
         </tr></thead><tbody>`;
