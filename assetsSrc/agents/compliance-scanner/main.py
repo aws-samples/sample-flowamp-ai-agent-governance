@@ -1,44 +1,41 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Compliance Auditor — Strands agent that evaluates agents against compliance frameworks daily.
+"""Compliance Auditor - Strands agent that evaluates agents against compliance
+frameworks daily.
 
-This agent runs one-shot: it is invoked directly (rotation path with no explicit
-agentId, or on-demand with an agentId in the payload). This deployment has no AOP
-runtime / WorkItemTable, so work-item lifecycle tools resolve to safe no-ops
-(flowamp_tools.work_items).
+Runs one-shot, invoked either on the rotation path (no explicit agentId) or on demand
+with an agentId in the payload. This deployment has no AOP runtime or WorkItemTable, so
+the work-item lifecycle tools resolve to safe no-ops (flowamp_tools.work_items).
 
-The auditor runs once per day per target agent. It combines deterministic checks
-(from the shared flowamp_compliance_checks registry) with agentic judgement to
-produce a narrative, recommendations, and per-framework letter Grade. The entire
-audit is committed atomically through the finalize_audit tool.
+The auditor combines deterministic checks from the shared flowamp_compliance_checks
+registry with agentic judgement to produce a narrative, recommendations and a
+per-framework letter grade. The whole audit is committed atomically via finalize_audit.
+
+Must stay an AgentCore Runtime rather than a harness: it runs custom Python tools, writes
+to DynamoDB and executes the check registry, and a harness executes no code of its own (it
+supplies only a model, a prompt and tool declarations).
 
 Single-table model:
-  * Event, AOP, and agent-compliance data all live in one physical table, so
-    every DynamoDB access uses AGENT_TABLE_NAME.
-  * ``list_active_agents`` (flowamp_tools.agent_catalog) Scans the AgentTable
-    with a ``sk='INFO'`` FilterExpression (this table has no GSI).
+  * Event, AOP and agent-compliance data share one physical table, so every DynamoDB
+    access uses AGENT_TABLE_NAME.
+  * ``list_active_agents`` (flowamp_tools.agent_catalog) Scans the AgentTable with a
+    ``sk='INFO'`` FilterExpression; the table has no GSI.
   * The foundation model comes from ``get_model_config()['complianceScannerModel']``.
 """
 # ---------------------------------------------------------------------------
-# OTEL bootstrap — MUST run before any other import (boto3, strands, etc.).
+# OTEL bootstrap - must run before any other import (boto3, strands, etc.).
 #
-# OpenTelemetry auto-instrumentation is enabled by launching the agent as
-# `opentelemetry-instrument python main.py`. That wrapper reads the
-# OTEL_*/AGENT_OBSERVABILITY_ENABLED env vars and installs the global
-# TracerProvider + OTLP exporter wired to aws/spans. Per the AWS docs
-# (bedrock-agentcore/observability-configure §"Enabling observability in agent
-# code for AgentCore-hosted agents"), this wrapper is required for spans to be
-# exported. Direct-code deploy launches a bare `python main.py`, so this block
-# re-execs the process under auto-instrumentation to enable it.
-#
-# The re-exec invokes the interpreter's public auto-instrumentation entry point,
-# opentelemetry.instrumentation.auto_instrumentation.run(), which is importable
-# from the vendored packages in the bundle root, rather than the
-# `opentelemetry-instrument` console script (uv --target installs it under
-# <bundle>/bin, off PATH, with a build-machine shebang). The _OTEL_REEXEC guard
-# makes it one-shot. It runs only when AGENT_OBSERVABILITY_ENABLED is set so
-# local runs are unaffected, and any failure is swallowed so a missing wrapper
-# never crashes the agent.
+# Spans export only under `opentelemetry-instrument`, which reads the
+# OTEL_*/AGENT_OBSERVABILITY_ENABLED env vars and installs the global TracerProvider
+# plus the OTLP exporter wired to aws/spans. Direct-code deploy launches a bare
+# `python main.py`, so this block re-execs the process under
+# `opentelemetry.instrumentation.auto_instrumentation.run()` rather than the
+# `opentelemetry-instrument` console script (`uv pip install --target` puts that
+# script in <bundle>/bin, off PATH, with a build-machine shebang). _OTEL_REEXEC
+# makes it one-shot and any failure is swallowed so a missing wrapper never
+# crashes the agent.
+# Docs: bedrock-agentcore/observability-configure, "Enabling observability in
+# agent code for AgentCore-hosted agents".
 import os as _os
 import sys as _sys
 
@@ -52,9 +49,8 @@ if (
         _bundle_dir + _os.pathsep + _os.environ.get("PYTHONPATH", "")
     ).rstrip(_os.pathsep)
     try:
-        # Safe: the exec target and argv are the process's own trusted values
-        # (sys.executable, sys.argv) — no external/user input reaches this call.
-        # It only re-launches this same script under OpenTelemetry auto-instrumentation.
+        # Safe: the exec target and argv are the process's own values (sys.executable,
+        # sys.argv), so no external input reaches this call.
         _os.execv(  # nosemgrep: dangerous-os-exec-tainted-env-args,dangerous-os-exec-audit
             _sys.executable,
             [
@@ -121,10 +117,9 @@ _agent_id = os.environ.get("FLOWAMP_AGENT_ID", "compliance-scanner")
 _guardrail_id = os.environ.get("BEDROCK_GUARDRAIL_ID", "")
 _guardrail_version = os.environ.get("BEDROCK_GUARDRAIL_VERSION", "DRAFT")
 
-# Escalation group used as the default recipient for guardrail-evidence work
-# items when the target agent carries no escalationGroup of its own. Optional in
-# this one-shot deployment (create_work_item is a no-op), so absence is a
-# WARNING rather than a hard startup failure.
+# Default recipient for guardrail-evidence work items when the target agent carries no
+# escalationGroup of its own. Optional in this deployment, where create_work_item is a
+# no-op, so absence warns rather than failing startup.
 _compliance_escalation_group = os.environ.get("COMPLIANCE_ESCALATION_GROUP", "")
 if not _compliance_escalation_group:
     logger.warning(
@@ -142,7 +137,7 @@ _cloudwatch = boto3.client("cloudwatch", region_name=_region)
 
 
 # =============================================================================
-# PRIVATE HELPERS — retained for testability and eligibility fallback path
+# PRIVATE HELPERS
 # =============================================================================
 
 def _put_metric(metric_name: str, value: float = 1.0) -> None:
@@ -158,8 +153,7 @@ def _put_metric(metric_name: str, value: float = 1.0) -> None:
 def _list_all_agents() -> list:
     """Return all agent INFO records from AgentTable via the shared helper.
 
-    ``list_active_agents`` Scans the AgentTable filtering on sk='INFO'
-    (this table has no GSI).
+    ``list_active_agents`` Scans the table filtering on sk='INFO'; there is no GSI.
     """
     return _list_active_agents()
 
@@ -178,23 +172,16 @@ def _query_agent(agent_id: str) -> dict | None:
 def _pick_rotation_target() -> Optional[str]:
     """Return the agentId of the auditable-platform agent with the oldest lastAuditedAt.
 
-    Selection algorithm:
-    1. Load auditable platform IDs from AgentTable FLOWAMP_PLATFORMS partition.
-    2. Load all agent INFO rows; filter for eligible + on-auditable-platform.
-    3. Emit a single warning event listing eligible agents that have no platformId
-       (orphan agents — visible to operators without blocking the rotation).
-    4. Sort eligible agents by lastAuditedAt ascending; absent/null sorts as ''
-       so never-audited agents always win over any agent with a real timestamp.
-    5. Return the head agentId, or None if the candidate set is empty.
+    Loads the auditable platform ids from the FLOWAMP_PLATFORMS partition and all agent
+    INFO rows, keeps the eligible agents on an auditable platform, warns once about
+    eligible agents with no platformId, then sorts by lastAuditedAt ascending (absent
+    sorts as '' so never-audited agents come first). Returns None if nothing qualifies.
 
-    Absent platform configuration means "audit everything eligible", NOT "audit
-    nothing". Nothing in the platform writes the FLOWAMP_PLATFORMS sentinel rows —
-    they are an operator-managed allowlist — so on a fresh deploy the auditable set
-    is empty. Treating that as "no candidates" made every rotation run (the daily
-    schedule and the fleet Re-audit button) a silent no-op that still reported
-    success. Failing open is right here because the audit is READ-ONLY: it grades
-    agents and writes AUDIT#/RAI# rows, so over-auditing is harmless while
-    under-auditing hides governance gaps, which is the opposite of the point.
+    An absent platform configuration means "audit everything eligible", not "audit
+    nothing": the FLOWAMP_PLATFORMS rows are an operator-managed allowlist that nothing
+    writes automatically, so the auditable set is empty on a fresh deploy. Failing open is
+    safe because the audit only grades agents and writes AUDIT#/RAI# rows, so over-auditing
+    is harmless while under-auditing hides governance gaps.
     """
     auditable_platform_ids = list_auditable_platforms()
 
@@ -211,9 +198,8 @@ def _pick_rotation_target() -> Optional[str]:
             len(eligible),
         )
 
-    # Warn about agents that are eligible by status but have no platformId. Only
-    # meaningful when a platform allowlist exists — without one, platformId is
-    # not used for selection at all.
+    # Warn about agents eligible by status but with no platformId. Only meaningful when
+    # an allowlist exists; without one, platformId plays no part in selection.
     if auditable_platform_ids:
         unlinked = [
             a.get("agentId", "") for a in all_agents
@@ -231,8 +217,7 @@ def _pick_rotation_target() -> Optional[str]:
         logger.warning("Rotation found no eligible agents to audit")
         return None
 
-    # Sort by lastAuditedAt ascending; treat absent/null as "" so never-audited
-    # agents sort first (oldest) and are picked before any previously-audited agent.
+    # Absent/null lastAuditedAt sorts as "" so never-audited agents come first.
     eligible.sort(key=lambda a: a.get("lastAuditedAt") or "")
     return eligible[0].get("agentId", "")
 
@@ -260,7 +245,7 @@ _AUDIT_TOOLS = [
     query_athena,
     read_past_audits,
     read_past_overrides,
-    # U-091: access-matrix read tools for sensitivity-vs-label reasoning
+    # Access-matrix reads for sensitivity-vs-label reasoning
     list_agent_data_access,
     list_agent_tool_access,
     # Mutating tools
@@ -417,14 +402,12 @@ app = BedrockAgentCoreApp()
 async def _invoke_core(payload):
     """Core async generator logic for AgentCore invocations.
 
-    Accepts both shapes:
-    1. Work-item-driven dispatch: payload includes workItemId, workItem (full
-       snapshot), and messages. The target agentId is read from
-       payload.workItem.info.payload.agentId. In this repo the work-item tools
-       are no-ops (no AOP runtime), so this path runs harmlessly.
-    2. Direct / on-demand: agentId in the payload top-level routes to the
-       manual on-demand audit path. If no agentId is present, the rotation
-       algorithm picks the eligible agent with the oldest lastAuditedAt on
+    Accepts two payload shapes:
+    1. Work-item dispatch: workItemId, workItem (full snapshot) and messages, with the
+       target agentId at payload.workItem.info.payload.agentId. The work-item tools are
+       no-ops here because there is no AOP runtime.
+    2. Direct / on-demand: a top-level agentId routes to the manual audit path. With no
+       agentId, the rotation picks the eligible agent with the oldest lastAuditedAt on
        an auditable platform.
     """
     reset_run_context()
@@ -435,8 +418,8 @@ async def _invoke_core(payload):
     work_item_payload = work_item_info.get("payload", {})
     target_agent_id = work_item_payload.get("agentId", "")
 
-    # Bind the dispatch workItemId to the run so finalize_audit can close it
-    # (no-op in this deployment). The LLM no longer needs to remember the close.
+    # Bind the dispatch workItemId to the run so finalize_audit closes it (a no-op in
+    # this deployment) without the LLM having to remember to.
     dispatch_work_item_id = payload.get("workItemId") or work_item_info.get("workItemId")
     set_dispatch_work_item_id(dispatch_work_item_id)
 
@@ -447,8 +430,8 @@ async def _invoke_core(payload):
 
     if target_agent_id:
         # ── Manual on-demand path ────────────────────────────────────────────
-        # Pre-stamp before audit so even a failed manual run advances the
-        # rotation cursor consistently with the scheduled path.
+        # Pre-stamp so even a failed manual run advances the rotation cursor, matching
+        # the scheduled path.
         now_ts = _now_iso()
         stamp_agent_last_audited(target_agent_id, now_ts)
         user_message = (
@@ -463,8 +446,8 @@ async def _invoke_core(payload):
         chosen_id = _pick_rotation_target()
 
         if chosen_id is None:
-            # No eligible agents on auditable platforms — emit skip event and
-            # yield a terminal output without invoking the Strands agent.
+            # No eligible agents on auditable platforms: emit a skip event and yield a
+            # terminal output without invoking the Strands agent.
             log_agent_decision(
                 action_type="compliance_audit_skip",
                 input_summary="No agents on auditable platforms found",
@@ -474,9 +457,9 @@ async def _invoke_core(payload):
             yield {"type": "output", "result": "no eligible agents", "sessionId": session_id}
             return
 
-        # Pre-stamp lastAuditedAt BEFORE invoking the Strands loop so a flaky
-        # audit cannot park the rotation on the same agent forever — the cursor
-        # always advances regardless of audit outcome. See ADR-22.
+        # Pre-stamp lastAuditedAt before invoking the Strands loop so a flaky audit
+        # cannot park the rotation on the same agent forever; the cursor advances
+        # regardless of outcome.
         now_ts = _now_iso()
         stamp_agent_last_audited(chosen_id, now_ts)
         target_agent_id = chosen_id
@@ -496,7 +479,7 @@ async def _invoke_core(payload):
                 yield {"type": "text", "result": chunk, "sessionId": session_id}
     except Exception as exc:
         # Logged with exc_info=True and re-raised so the runtime fails loudly.
-        # lastAuditedAt is NOT rolled back — see ADR-22.
+        # lastAuditedAt is not rolled back, so the rotation still advances.
         logger.error(
             "Compliance audit failed for agent %s: %s",
             target_agent_id, exc,
@@ -508,7 +491,7 @@ async def _invoke_core(payload):
             output_summary=str(exc)[:500],
             evaluation_result="error",
         )
-        # Best-effort metric emit — failure here must not mask the original error.
+        # Best-effort metric emit; a failure here must not mask the original error.
         try:
             _cloudwatch.put_metric_data(
                 Namespace="FlowAMP/ComplianceScanner",
@@ -519,7 +502,7 @@ async def _invoke_core(payload):
                     "Unit": "Count",
                 }],
             )
-        except Exception:  # noqa: broad — metric emit failure must never surface
+        except Exception:  # noqa: broad; a metric emit failure must never surface
             pass
         raise
 
@@ -528,7 +511,7 @@ async def _invoke_core(payload):
 
 @app.entrypoint
 async def invoke(payload):
-    """AgentCore entrypoint — delegates to _invoke_core."""
+    """AgentCore entrypoint; delegates to _invoke_core."""
     async for event in _invoke_core(payload):
         yield event
 

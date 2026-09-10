@@ -3,7 +3,7 @@
 """Framework templates for the five built-in compliance frameworks.
 
 Each template matches the INFO row schema in DES-11 §ComplianceFrameworkTable schema.
-Per-check override rows (CHECK#{checkId}) are seeded by `mise run seed-frameworks` (U-079).
+Per-check override rows (CHECK#{checkId}) are seeded alongside the framework rows.
 
 `ALL_FRAMEWORKS` is exported as a list of framework definition dicts (each carrying a
 `frameworkId` key) so callers can iterate framework definitions directly. The

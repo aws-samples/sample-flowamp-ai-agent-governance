@@ -1,7 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 """
-RAI Scorer Lambda — calculates Responsible AI scores from real AWS signals.
+RAI Scorer Lambda - calculates Responsible AI scores from real AWS signals.
 
 Runs on a daily EventBridge schedule. For each registered agent, computes:
   - fairness:       guardrail intervention rate (lower = fairer, no biased outputs leaking)
@@ -14,6 +14,11 @@ Signals used:
   - CloudWatch: Bedrock Guardrail metrics, Lambda errors, invocation counts
   - CloudTrail: event coverage for the agent's resources (last 24h)
   - DynamoDB:   existing requests/errors fields from the metrics-collector
+
+Every signal is read from this account, so only AWS-native agents can be scored. Agents from
+third-party connectors (Microsoft Foundry, Okta, MuleSoft) or from other AWS accounts are left
+unscored with raiScoreStatus='not-scored' and a machine-readable raiScoreReason, so an absent
+score is stated rather than published as a score of zero. See _rai_platform_support().
 """
 
 import json
@@ -29,6 +34,27 @@ ct = boto3.client('cloudtrail')
 
 # Weights for overall score
 WEIGHTS = {'fairness': 0.25, 'transparency': 0.25, 'accountability': 0.25, 'ethics': 0.25}
+
+# Agent rows carry the platform two ways: 'platform' is the display value the discovery paths
+# stamp ('native', 'aws-org', 'microsoft', 'okta', 'mulesoft'), and 'platformId' is the
+# FLOWAMP_PLATFORMS sentinel id the AgentCore discovery-scanner stamps. Only 'native' rows
+# describe an agent whose guardrail metrics and CloudTrail events land in this account.
+_SCOREABLE_PLATFORMS = {'native'}
+# Cross-account rows are AWS agents, but their metrics and events live in the member account and
+# this Lambda holds no cross-account role. Separate from the third-party platforms so the recorded
+# reason distinguishes "another AWS account" from "another vendor".
+_CROSS_ACCOUNT_PLATFORMS = {'aws-org'}
+# Mirrors AMAZON_BEDROCK_AGENTCORE_PLATFORM_ID in the discovery-scanner. Same default on both
+# sides, so leaving the var unset keeps the two in agreement.
+_BEDROCK_PLATFORM_ID = os.environ.get(
+    'AMAZON_BEDROCK_AGENTCORE_PLATFORM_ID', 'amazon-bedrock-agentcore',
+).strip().lower()
+
+# Appended to every UpdateExpression on a path that did evaluate an AWS agent, so an agent that
+# becomes scoreable does not keep a stale not-scored marker next to a fresh score. REMOVE on an
+# absent attribute is a documented no-op, so this needs no condition or read-before-write:
+# https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.UpdateExpressions.html
+_CLEAR_NOT_SCORED = ' REMOVE raiScoreStatus, raiScoreReason'
 
 
 def get_metric(namespace, metric_name, dimensions, stat='Sum', hours=24):
@@ -67,10 +93,9 @@ def count_cloudtrail_events(resource_name, hours=24):
 def _guardrail_dims(agent, extra=None):
     """Build the CloudWatch dimensions for a Bedrock Guardrails metric.
 
-    Guardrail metrics are dimensioned by GuardrailArn (+ optional GuardrailVersion
-    / GuardrailPolicyType) — NOT by agent id. An agent record carries a
-    'guardrailArn' only when a guardrail is attached; without one we return an
-    empty dimension set, which yields no datapoints (the no-signal path).
+    Guardrail metrics are dimensioned by GuardrailArn (plus optional GuardrailVersion or
+    GuardrailPolicyType), not by agent id. An agent carries 'guardrailArn' only when a guardrail is
+    attached; without one this returns an empty dimension set, which yields no datapoints.
     """
     dims = []
     arn = agent.get('guardrailArn')
@@ -89,17 +114,15 @@ def score_fairness(agent):
     High intervention = model tried to produce biased content (guardrail caught it).
     Score: starts at 95, penalized by intervention rate.
     """
-    # DynamoDB returns numbers as Decimal; coerce to float so arithmetic with the
-    # float coefficients below cannot raise "float / Decimal" TypeErrors.
+    # DynamoDB returns numbers as Decimal; coerce to float so arithmetic with the float coefficients
+    # below cannot raise a "float / Decimal" TypeError.
     invocations = float(agent.get('requests', 0) or 1)
     errors = float(agent.get('errors', 0) or 0)
     error_rate = errors / max(invocations, 1)
 
-    # Check guardrail interventions (if a guardrail is attached). The Bedrock
-    # Guardrails metric is 'InvocationsIntervened' in the 'AWS/Bedrock/Guardrails'
-    # namespace, dimensioned by GuardrailArn — there is no 'GuardrailInterventions'
-    # metric and no per-AgentId dimension. Agents with no attached guardrail
-    # produce no datapoints, which reads as no signal rather than a bad score.
+    # Guardrail interventions, when a guardrail is attached. The metric is 'InvocationsIntervened' in
+    # 'AWS/Bedrock/Guardrails', dimensioned by GuardrailArn; there is no 'GuardrailInterventions'
+    # metric and no per-AgentId dimension. An agent with no guardrail produces no datapoints.
     # https://docs.aws.amazon.com/bedrock/latest/userguide/monitoring-guardrails-cw-metrics.html
     guardrail_interventions = float(get_metric(
         'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
@@ -167,18 +190,18 @@ def score_ethics(agent):
     """
     invocations = float(agent.get('requests', 0) or 1)
 
-    # Guardrail content-filter interventions. Same 'InvocationsIntervened' metric,
-    # narrowed by GuardrailPolicyType=ContentPolicy to harmful-content blocks —
-    # there is no 'GuardrailBlocked' metric.
+    # Guardrail content-filter interventions: the same 'InvocationsIntervened' metric narrowed by
+    # GuardrailPolicyType=ContentPolicy. There is no 'GuardrailBlocked' metric.
     guardrail_blocks = float(get_metric(
         'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
         _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType', 'Value': 'ContentPolicy'}]),
     ) or 0)
-    # Blocks are GOOD — means guardrail is working. But too many = model is problematic.
+    # Blocks are a positive signal (the guardrail is working), but a very high rate means the model
+    # itself is problematic.
     block_rate = guardrail_blocks / max(invocations, 1)
 
-    # PII redaction interventions: same metric, SensitiveInformationPolicy
-    # dimension — there is no 'GuardrailPiiRedacted' metric.
+    # PII redaction interventions: same metric, SensitiveInformationPolicy dimension.
+    # There is no 'GuardrailPiiRedacted' metric.
     pii_redactions = float(get_metric(
         'AWS/Bedrock/Guardrails', 'InvocationsIntervened',
         _guardrail_dims(agent, [{'Name': 'GuardrailPolicyType', 'Value': 'SensitiveInformationPolicy'}]),
@@ -191,13 +214,11 @@ def score_ethics(agent):
 
 
 def has_live_signal(agent):
-    """True if any real RAI signal exists for this agent (guardrail activity or
-    CloudTrail events).
+    """True if any real RAI signal exists for this agent (guardrail activity or CloudTrail events).
 
-    Without this gate every agent that has no attached guardrail scores from the
-    uniform no-signal base, so a catalog of agents with varied scores collapses to
-    identical values on the first run. Returning False lets run_scoring() preserve
-    the existing score instead of overwriting it with a fabricated one.
+    Agents with no attached guardrail would otherwise all score from the same no-signal base,
+    collapsing varied scores to identical values. Returning False lets run_scoring() preserve the
+    existing score instead of overwriting it with one derived from absent data.
     """
     try:
         total = (
@@ -214,6 +235,58 @@ def has_live_signal(agent):
         return total > 0
     except Exception:
         return False
+
+
+def _rai_platform_support(agent):
+    """Return (scoreable, reason) for the platform this agent lives on.
+
+    'reason' is a short kebab-case token, empty when scoreable, following the finops-collector's
+    `reason: ce-empty` convention: a run that completed with nothing to read says so in a
+    machine-readable field.
+
+    Checked before any scoring call, because the sub-scores are not signal detectors: score_fairness()
+    and friends start from a fixed base (95, 93, ...) and subtract penalties, so an agent with no
+    signals lands on a high fabricated score. The has_live_signal() gate in run_scoring() only
+    rescues agents that already carry a score, so a newly discovered non-AWS agent would otherwise be
+    published with that base as if it had been measured.
+    """
+    platform = (agent.get('platform') or '').strip().lower()
+    platform_id = (agent.get('platformId') or '').strip().lower()
+
+    # Either identifier is sufficient: the discovery-scanner stamps the sentinel platformId, while
+    # the Lambda discovery path stamps only 'platform'.
+    if platform in _SCOREABLE_PLATFORMS or platform_id == _BEDROCK_PLATFORM_ID:
+        return True, ''
+    if platform in _CROSS_ACCOUNT_PLATFORMS:
+        return False, 'platform-cross-account'
+    if not platform and not platform_id:
+        # No platform recorded at all: unscoreable rather than assumed native, since guessing AWS is
+        # the assertion this gate exists to avoid, and such a row is a discovery bug worth surfacing.
+        return False, 'platform-unknown'
+    return False, 'platform-unsupported'
+
+
+def _mark_not_scored(agent, reason):
+    """Record that an agent was not scored, leaving its score fields untouched.
+
+    Does not write score/fairness/transparency/accountability/ethics: an agent that already carries
+    values keeps them, and raiScoreStatus is what tells a reader a zero is an absence of measurement
+    rather than a measurement of zero. raiUpdatedAt is still stamped, or an unscoreable agent looks
+    like one the scheduled scorer never reached.
+    """
+    try:
+        table.update_item(
+            Key={'agentId': agent['agentId'], 'sk': 'INFO'},
+            UpdateExpression=('SET raiScoreStatus=:st, raiScoreReason=:rsn, '
+                              'raiUpdatedAt=:ts'),
+            ExpressionAttributeValues={
+                ':st': 'not-scored',
+                ':rsn': reason,
+                ':ts': datetime.utcnow().isoformat() + 'Z',
+            },
+        )
+    except Exception as e:
+        print(f'Not-scored marker failed for {agent["agentId"]}: {e}')
 
 
 def compute_overall(fairness, transparency, accountability, ethics):
@@ -248,11 +321,11 @@ def get_rmf_compliance_score():
 def run_scoring():
     """Compute and persist RAI scores for all registered agents.
 
-    Shared by both invocation paths (EventBridge schedule and the on-demand
-    API route). Returns {'updated': N, 'total': N}.
+    Shared by both invocation paths (EventBridge schedule and the on-demand API route).
+    Returns {'updated': N, 'total': N}.
     """
-    # Scan for agent records only: entity rows (sk='INFO'), excluding
-    # compliance:, aop:, access: prefixes (and any COST#/EVENT# rows by sk).
+    # Agent records only: entity rows (sk='INFO'), excluding the compliance:/aop:/access: prefixes
+    # and any COST#/EVENT# rows.
     from boto3.dynamodb.conditions import Attr
     all_items = table.scan(FilterExpression=Attr('sk').eq('INFO')).get('Items', [])
     agents = [i for i in all_items
@@ -263,20 +336,44 @@ def run_scoring():
 
     updated = 0
     skipped = 0
+    not_scoreable = 0
+    no_signal = 0
     for agent in agents:
         if agent.get('status') == 'decommissioned':
             continue
 
-        # No live signal and an existing score: stamp the run timestamp but leave
-        # the score alone. Overwriting it would replace a real prior reading with a
-        # value derived from absent data. Once guardrail or CloudTrail signals
-        # exist, the agent scores normally and the value moves.
+        # Platform gate ahead of the has_live_signal() probe: for a non-AWS agent those CloudWatch and
+        # CloudTrail calls are guaranteed empty, so running them spends four API calls per agent per
+        # day to learn nothing.
+        scoreable, not_scored_reason = _rai_platform_support(agent)
+        if not scoreable:
+            _mark_not_scored(agent, not_scored_reason)
+            not_scoreable += 1
+            continue
+
+        # No live signal: what happens next depends on whether this agent has ever been measured.
+        #
+        # The sub-scores are not signal detectors. score_fairness and friends start from a fixed
+        # base (95, 80, 95, 93) and subtract penalties, so an agent with nothing to read lands on
+        # an overall of 91 that looks measured and is not. An agent that has never been invoked,
+        # has no guardrail attached and generates no CloudTrail events must therefore report that
+        # it was not scored, not a number assembled from those constants.
+        #
+        # An agent that already carries a score keeps it, because that reading was real when it was
+        # taken; going quiet is not evidence of a lower score. Once signals appear, either agent
+        # scores normally again.
         existing_score = float(agent.get('score', 0) or 0)
-        if existing_score > 0 and not has_live_signal(agent):
+        if not has_live_signal(agent):
+            if existing_score <= 0:
+                _mark_not_scored(agent, 'no-signal')
+                no_signal += 1
+                continue
             try:
                 table.update_item(
                     Key={'agentId': agent['agentId'], 'sk': 'INFO'},
-                    UpdateExpression='SET raiUpdatedAt=:ts',
+                    # The platform is readable here (the score is preserved for want of signal, not
+                    # of a scoreable platform), so clear any marker left by an earlier run.
+                    UpdateExpression='SET raiUpdatedAt=:ts' + _CLEAR_NOT_SCORED,
                     ExpressionAttributeValues={':ts': datetime.utcnow().isoformat() + 'Z'},
                 )
             except Exception as e:
@@ -289,13 +386,15 @@ def run_scoring():
         accountability = score_accountability(agent)
         ethics = score_ethics(agent)
         overall = compute_overall(fairness, transparency, accountability, ethics)
-        # Apply RMF modifier — weak system-level risk posture reduces overall score
+        # Apply the RMF modifier: a weak system-level risk posture reduces the overall score.
         overall = max(50, round(overall * rmf_modifier))
 
         try:
             table.update_item(
                 Key={'agentId': agent['agentId'], 'sk': 'INFO'},
-                UpdateExpression='SET score=:s, fairness=:f, transparency=:t, accountability=:a, ethics=:e, raiUpdatedAt=:ts',
+                UpdateExpression=('SET score=:s, fairness=:f, transparency=:t, '
+                                  'accountability=:a, ethics=:e, raiUpdatedAt=:ts'
+                                  + _CLEAR_NOT_SCORED),
                 ExpressionAttributeValues={
                     ':s': overall, ':f': fairness, ':t': transparency,
                     ':a': accountability, ':e': ethics,
@@ -303,19 +402,24 @@ def run_scoring():
                 },
             )
             updated += 1
-            # Log agentId + computed scores only — never full agent records or
-            # user-submitted metadata fields (owner, system, category, etc.).
+            # agentId and computed scores only, never full agent records or user-submitted metadata
+            # fields (owner, system, category, and so on).
             print(f'{agent["agentId"]}: score={overall} f={fairness} t={transparency} a={accountability} e={ethics}')
         except Exception as e:
             print(f'Update failed for {agent["agentId"]}: {e}')
 
     print(f'RAI scores updated for {updated}/{len(agents)} agents '
-          f'({skipped} preserved: no live signal)')
-    return {'updated': updated, 'skipped': skipped, 'total': len(agents)}
+          f'({skipped} preserved: no live signal, '
+          f'{not_scoreable} not scored: platform has no readable RAI signals, '
+          f'{no_signal} not scored: no signals to measure yet)')
+    # 'notScoreable' is additive: both paths keep returning 'updated'/'skipped'/'total'.
+    return {'updated': updated, 'skipped': skipped,
+            'notScoreable': not_scoreable, 'noSignal': no_signal,
+            'total': len(agents)}
 
 
-# CORS headers so the on-demand route works from the CloudFront-hosted UI,
-# matching the data-handler's contract (same Cognito-gated API).
+# CORS headers so the on-demand route works from the CloudFront-hosted UI, matching the
+# data-handler's contract (same Cognito-gated API).
 _CORS_HEADERS = {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
@@ -325,18 +429,17 @@ _CORS_HEADERS = {
 
 
 def _is_api_event(event):
-    """True when invoked through API Gateway (proxy integration) rather than
-    the EventBridge schedule. API events carry an httpMethod; the scheduled
-    rule sends a plain (often empty) dict."""
+    """True when invoked through API Gateway (proxy integration) rather than the EventBridge
+    schedule. API events carry an httpMethod; the scheduled rule sends a plain (often empty) dict."""
     return isinstance(event, dict) and 'httpMethod' in event
 
 
 def handler(event, context):
     """Dual-mode handler.
 
-    EventBridge schedule -> returns the plain result dict (unchanged contract).
-    API Gateway POST /rai/score -> returns an API Gateway proxy response with
-    CORS headers so the UI can trigger an on-demand re-score.
+    EventBridge schedule -> returns the plain result dict.
+    API Gateway POST /rai/score -> returns an API Gateway proxy response with CORS
+    headers so the UI can trigger an on-demand re-score.
     """
     if _is_api_event(event):
         if event.get('httpMethod') == 'OPTIONS':

@@ -8,23 +8,21 @@ import * as crypto from "crypto";
 /**
  * Assemble a self-contained AgentCore direct-code-deploy bundle at synth time.
  *
- * AgentCore's direct-code (zip) deployment uses a Lambda-style shared
- * responsibility model: AWS provides the Python language runtime, and YOU must
- * package your dependencies into the zip. `AgentRuntimeArtifact.fromCodeAsset`
- * only uploads the directory as-is — it does NOT run pip — so a bundle with a
- * bare `requirements.txt` crashes at runtime with ModuleNotFoundError.
+ * AgentCore's direct-code (zip) deployment uses a Lambda-style shared responsibility model:
+ * AWS provides the Python language runtime, and you must package dependencies into the zip.
+ * `AgentRuntimeArtifact.fromCodeAsset` uploads the directory as-is and does not run pip, so
+ * a bundle carrying only a `requirements.txt` crashes at runtime with ModuleNotFoundError.
  *
  * This helper produces a runtime-ready bundle by:
  *   1. copying the agent's own source (main.py, tools.py, requirements.txt),
  *   2. copying any requested shared packages (flowamp_tools,
  *      flowamp_compliance_checks) to the bundle root, and
- *   3. vendoring the pip dependencies for the runtime's platform
- *      (linux/arm64, cp312) INTO the bundle via `uv pip install --target`,
- *      exactly per the AWS direct-code-deploy Python guide:
+ *   3. vendoring the pip dependencies for the runtime's platform (linux/arm64, cp312) into
+ *      the bundle via `uv pip install --target`, per the AWS direct-code-deploy Python guide:
  *      https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy-python.html
  *
- * No Docker is required (uv resolves arm64 wheels cross-platform). The staged
- * path is returned for use as the fromCodeAsset `path`.
+ * No Docker is required, since uv resolves arm64 wheels cross-platform. The staged path is
+ * returned for use as the fromCodeAsset `path`.
  */
 export function assembleAgentBundle(opts: {
   /** Absolute path to the agent's own source directory (contains main.py). */
@@ -43,9 +41,9 @@ export function assembleAgentBundle(opts: {
   const requirementsPath = path.join(agentDir, "requirements.txt");
   const dest = path.join(stagingRoot, bundleName);
 
-  // Cache guard: re-vendoring pip deps is the slow part (~10-30s/bundle). Skip it
-  // when the inputs (requirements + shared package set) are unchanged since the
-  // last synth. A hash marker file records what the current bundle was built from.
+  // Cache guard: re-vendoring pip deps is the slow part (~10-30s per bundle). Skip it when
+  // the inputs (requirements + shared package set) are unchanged since the last synth. A
+  // hash marker file records what the current bundle was built from.
   const inputHash = hashInputs(requirementsPath, sharedDir, sharedPackages);
   const marker = path.join(dest, ".bundle-hash");
   if (fs.existsSync(marker) && fs.readFileSync(marker, "utf-8") === inputHash) {
@@ -120,8 +118,8 @@ function hashDir(dir: string, h: crypto.Hash): void {
 function copyDir(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    // Skip caches / compiled artifacts / test dirs / the marker so the bundle
-    // stays lean. Dockerfiles are unused in direct-code deploy — skip them too.
+    // Skip caches, compiled artifacts, test dirs and the marker so the bundle stays lean.
+    // Dockerfiles are unused in direct-code deploy, so skip those too.
     if (
       entry.name === "__pycache__" || entry.name.endsWith(".pyc") ||
       entry.name === "tests" || entry.name === "Dockerfile" || entry.name === ".bundle-hash"

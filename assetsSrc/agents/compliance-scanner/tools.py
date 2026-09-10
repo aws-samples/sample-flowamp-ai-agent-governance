@@ -1,6 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Compliance Auditor tool surface — the U-081/U-091 agentic auditor.
+"""Compliance Auditor tool surface.
 
 Tool classification:
   Read-only  : get_agent, list_applicable_frameworks, run_check,
@@ -8,31 +8,25 @@ Tool classification:
                list_agent_data_access, list_agent_tool_access
   Mutating   : create_work_item, add_audit_note, finalize_audit
 
-Only finalize_audit, add_audit_note, and create_work_item write to AWS.
+Only finalize_audit, add_audit_note and create_work_item write to AWS.
 
 Single-table data model:
-  * Audit, compliance, event, and access-grant data all live in the ONE
-    AgentTable named by ``AGENT_TABLE_NAME``. The distinct row domains are kept
-    apart by the ``sk`` prefix convention
-    (INFO / EVENT#/ AUDIT# / NOTE# / RAI# / COMPLIANCE# / DATA# / TOOL#).
-  * There is NO ``sk-agentId-index`` (or any) GSI in this repo, so any query
-    that would need one is expressed as a paginated Scan with a FilterExpression
-    on the sk prefix. (Per-partition Query — e.g. get_agent's COMPLIANCE# query —
-    is still a Query since it keys on agentId.)
-  * There is NO Athena / Glue curated warehouse in this repo. ``query_athena``
-    degrades to a safe no-data stub returning a valid empty shape with an
-    explanatory note, and ``read_past_overrides`` reads ``human_override``
-    EVENT# rows directly from the single table. Neither errors; both preserve
-    their return shape so the agent's system prompt (which references both
-    tools) keeps working.
-  * Data and tool access grants are read straight off the single table:
-    ``list_agent_data_access`` / ``list_agent_tool_access`` read the DATA#/TOOL#
-    grant rows and surface any sensitivity metadata already carried on the grant
-    row itself (no separate INFO join). Missing metadata → sensitivity None,
-    when metadata is absent.
+  * Audit, compliance, event and access-grant data all live in the one AgentTable named
+    by ``AGENT_TABLE_NAME``, separated by sk prefix (INFO / EVENT# / AUDIT# / NOTE# /
+    RAI# / COMPLIANCE# / DATA# / TOOL#).
+  * The table has no GSI, so any query that would need one is a paginated Scan with a
+    FilterExpression on the sk prefix. Per-partition lookups (e.g. get_agent's
+    COMPLIANCE# query) remain Queries because they key on agentId.
+  * There is no Athena / Glue curated warehouse. ``query_athena`` returns a valid empty
+    shape with an explanatory note, and ``read_past_overrides`` reads ``human_override``
+    EVENT# rows directly from the table. Neither errors, and both keep their documented
+    return shape.
+  * ``list_agent_data_access`` / ``list_agent_tool_access`` read the DATA#/TOOL# grant
+    rows and surface whatever sensitivity metadata the grant row itself carries; there
+    is no separate INFO join, and missing metadata yields sensitivity None.
   * ``list_applicable_frameworks`` resolves definitions from the code-defined
-    ``flowamp_compliance_checks.frameworks`` registry via flowamp_tools
-    (get_framework / list_agent_frameworks); there is no ComplianceFrameworkTable.
+    ``flowamp_compliance_checks.frameworks`` registry via flowamp_tools (get_framework /
+    list_agent_frameworks); there is no ComplianceFrameworkTable.
 """
 import json
 import logging
@@ -60,9 +54,8 @@ from flowamp_tools import (
 _log = logging.getLogger(__name__)
 
 _region = os.environ.get("AWS_REGION", "us-east-1")
-# Single-table data model: compliance, extensions, event, framework, AOP, and
-# work-item data all live in one physical table, so every direct DynamoDB access
-# uses AGENT_TABLE_NAME.
+# Single-table data model: compliance, extension, event, framework, AOP and work-item
+# data share one physical table, so every direct DynamoDB access uses AGENT_TABLE_NAME.
 _agent_table_name = os.environ.get("AGENT_TABLE_NAME", "")
 _agent_id = os.environ.get("FLOWAMP_AGENT_ID", "compliance-scanner")
 
@@ -70,11 +63,11 @@ _env = os.environ.get("ENVIRONMENT", "dev")
 _namespace = os.environ.get("FLOWAMP_NAMESPACE", "flowamp")
 _ns_snake = _namespace.replace("-", "_")
 
-# ── Athena config — retained for signature/CheckContext parity only ───────────
-# This repo has NO Athena/Glue curated warehouse. These values are still read so
-# CheckContext (below) has consistent fields and the Athena-backed checks in
-# flowamp_compliance_checks degrade gracefully (they return skip on AccessDenied).
-# The query_athena tool itself no longer executes anything — see its docstring.
+# ── Athena config, retained for CheckContext parity only ─────────────────────
+# There is no Athena/Glue curated warehouse here. These values are still read so
+# CheckContext below has consistent fields and the Athena-backed checks in
+# flowamp_compliance_checks skip on AccessDenied rather than error. The query_athena
+# tool executes nothing; see its docstring.
 _athena_database = os.environ.get("ATHENA_DATABASE", f"{_ns_snake}_{_env}_curated")
 _athena_schema = _athena_database
 _athena_workgroup = os.environ.get("ATHENA_WORKGROUP", "primary")
@@ -104,8 +97,31 @@ def _score_to_grade(score: float, rubric: dict) -> str:
     return "F"
 
 
+def _check_outcome(result) -> str:
+    """Return 'pass', 'fail' or 'skip' for one check result, whatever shape it arrives in.
+
+    The runner yields CheckResult objects; stored audit rows carry plain dicts. A missing
+    result is treated as 'skip', not 'fail': the check did not run, so there is nothing to
+    penalise.
+    """
+    if result is None:
+        return "skip"
+    value = getattr(result, "result", None)
+    if value is None and isinstance(result, dict):
+        value = result.get("result")
+    return value if value in ("pass", "fail", "skip") else "skip"
+
+
 def _compute_rai_composite(framework: dict, check_results: dict) -> float:
-    """Compute the RAI composite score from per-dimension weighted check results."""
+    """Compute the RAI composite score from per-dimension weighted check results.
+
+    Skipped checks are excluded from the dimension rather than counted as failures, and the
+    remaining weights are renormalised over what actually ran. A check skips when it cannot be
+    evaluated - not configured, not applicable to the target, or the API call was denied - and
+    scoring that as a failure reports a governance gap the agent may not have. A dimension in
+    which nothing ran is dropped from the composite entirely, exactly like one with no checks,
+    so the score always describes evidence that exists.
+    """
     rai_config = framework.get("raiConfig", {})
     per_dim = rai_config.get("perDimension", {})
     if not per_dim:
@@ -119,13 +135,19 @@ def _compute_rai_composite(framework: dict, check_results: dict) -> float:
         weights = dim_cfg.get("weights", {})
         if not checks:
             continue
-        dim_score = 0.0
+        passed_weight = 0.0
+        evaluated_weight = 0.0
         for cid in checks:
             cw = weights.get(cid, 1.0 / len(checks))
-            result = check_results.get(cid)
-            binary = 1.0 if (result and getattr(result, "result", result.get("result") if isinstance(result, dict) else None) == "pass") else 0.0
-            dim_score += cw * binary
-        weighted_sum += dim_weight * dim_score
+            outcome = _check_outcome(check_results.get(cid))
+            if outcome == "skip":
+                continue
+            evaluated_weight += cw
+            if outcome == "pass":
+                passed_weight += cw
+        if evaluated_weight <= 0:
+            continue
+        weighted_sum += dim_weight * (passed_weight / evaluated_weight)
         total_weight += dim_weight
 
     if total_weight == 0:
@@ -134,18 +156,28 @@ def _compute_rai_composite(framework: dict, check_results: dict) -> float:
 
 
 def _operational_pass_rate(framework: dict, check_results: dict) -> float:
-    """Compute pass rate for auditorConfig.checks."""
+    """Compute pass rate for auditorConfig.checks, over the checks that actually ran.
+
+    Skipped checks are excluded from both numerator and denominator for the same reason as in
+    _compute_rai_composite: a check that could not be evaluated is not a failed control. With
+    nothing evaluated the rate is 1.0, matching the no-checks case, so an unevaluated framework
+    does not masquerade as a failing one.
+    """
     op_checks = framework.get("auditorConfig", {}).get("checks", [])
     if not op_checks:
         return 1.0
     passed = 0
+    evaluated = 0
     for cid in op_checks:
-        result = check_results.get(cid)
-        if result:
-            r = getattr(result, "result", result.get("result") if isinstance(result, dict) else None)
-            if r == "pass":
-                passed += 1
-    return passed / len(op_checks)
+        outcome = _check_outcome(check_results.get(cid))
+        if outcome == "skip":
+            continue
+        evaluated += 1
+        if outcome == "pass":
+            passed += 1
+    if evaluated == 0:
+        return 1.0
+    return passed / evaluated
 
 
 def _count_failures(framework: dict, check_results: dict) -> tuple[int, int]:
@@ -237,10 +269,7 @@ def _emit_compliance_audit_event(
 
 
 def _patch_audit_work_item_ids(agent_id: str, audit_sk: str, work_item_ids: list) -> None:
-    """Patch escalatedWorkItems on an existing AUDIT# row via UpdateItem.
-
-    The AUDIT# row lives on AGENT_TABLE_NAME (single-table data model).
-    """
+    """Patch escalatedWorkItems on an existing AUDIT# row via UpdateItem."""
     table = _dynamodb.Table(_agent_table_name)
     table.update_item(
         Key={"agentId": agent_id, "sk": audit_sk},
@@ -250,15 +279,14 @@ def _patch_audit_work_item_ids(agent_id: str, audit_sk: str, work_item_ids: list
     )
 
 
-# ── Auditable platform helpers (Slice B) ─────────────────────────────────────
+# ── Auditable platform helpers ───────────────────────────────────────────────
 
 def list_auditable_platforms() -> set:
     """Return the set of platformId values whose `auditable` flag is True.
 
-    Queries AgentTable with PK=FLOWAMP_PLATFORMS and filters locally for
-    rows that carry auditable=true (coercing the string literal 'true' the
-    same way platforms.py does for the `native` field). This is a per-partition
-    Query (keyed on the FLOWAMP_PLATFORMS sentinel PK), so it needs no GSI.
+    Queries the FLOWAMP_PLATFORMS sentinel partition (so no GSI is needed) and filters
+    locally for auditable=true, coercing the string literal 'true' the same way
+    platforms.py does for the `native` field.
     """
     table = _dynamodb.Table(_agent_table_name)
     auditable_ids: set = set()
@@ -287,14 +315,12 @@ def list_auditable_platforms() -> set:
 
 
 def stamp_agent_last_audited(agent_id: str, ts: str) -> None:
-    """Write lastAuditedAt = ts onto the agent's AgentTable INFO row unconditionally.
+    """Write lastAuditedAt = ts onto the agent's INFO row unconditionally.
 
-    This is the pre-audit stamp written BEFORE the Strands loop runs so that
-    a flaky audit cannot park the rotation on the same agent indefinitely.
-    No ConditionExpression — we always want this write to land regardless of
-    the current value. The post-audit projection in flowamp_tools.compliance
-    uses a conditional write to ensure the later (real) timestamp wins if
-    both arrive in close succession.
+    This is the pre-audit stamp, written before the Strands loop runs so a flaky audit
+    cannot park the rotation on the same agent indefinitely. No ConditionExpression: the
+    write must always land. The post-audit projection in flowamp_tools.compliance uses a
+    conditional write so the later timestamp wins if both arrive together.
     """
     table = _dynamodb.Table(_agent_table_name)
     table.update_item(
@@ -306,27 +332,25 @@ def stamp_agent_last_audited(agent_id: str, ts: str) -> None:
 
 # ── Eligibility filter ────────────────────────────────────────────────────────
 
-# Non-agent entities that share the AgentTable and also use sk='INFO':
-# compliance frameworks, Agent Operating Policies, and access-matrix rows. The
-# same prefix tuple is used by agent-handler, data-handler, discovery-handler and
-# rai-scorer to separate agents from other entities in a Scan.
+# Non-agent entities that share the AgentTable and also use sk='INFO': compliance
+# frameworks, Agent Operating Policies and access-matrix rows. agent-handler,
+# data-handler, discovery-handler and rai-scorer use the same prefix tuple to separate
+# agents from other entities in a Scan.
 _NON_AGENT_PREFIXES = ("compliance:", "aop:", "access:")
 
 
 def _eligible_for_audit(agent_record: dict) -> bool:
     """Return True when the record is an agent that should be audited this run.
 
-    Skips FLOWAMP_ sentinel rows, non-agent entities that share the table, and
-    terminally-lifecycle'd agents.
+    Skips FLOWAMP_ sentinel rows, the non-agent entities that share the table, and
+    terminally-lifecycled agents.
     """
     agent_id = agent_record.get("agentId", "")
     status = agent_record.get("status", "")
     if agent_id.startswith("FLOWAMP_"):
         return False
-    # Not agents: auditing e.g. compliance:nist-sp800-37 produces a nonsense
-    # report about a framework definition. This used to be masked by the
-    # platformId filter in _pick_rotation_target (these rows carry no
-    # platformId), so it only surfaced once selection stopped requiring one.
+    # These are not agents: auditing e.g. compliance:nist-sp800-37 would produce a
+    # report about a framework definition.
     if agent_id.startswith(_NON_AGENT_PREFIXES):
         return False
     if status in ("decommissioned", "rejected"):
@@ -379,13 +403,12 @@ def get_agent(agentId: str) -> dict:  # noqa: N803
 
 @tool
 def list_applicable_frameworks(agentId: str) -> list:  # noqa: N803
-    """Return resolved framework dicts for agentId — always includes FLOWAMP_BASELINE.
+    """Return resolved framework dicts for agentId; always includes FLOWAMP_BASELINE.
 
-    Framework definitions are code-defined: they come from the
-    ``flowamp_compliance_checks.frameworks`` registry via
-    ``flowamp_tools.get_framework`` (there is no ComplianceFrameworkTable). The
-    per-agent framework *assignments* (COMPLIANCE# rows) are read from the single
-    AgentTable via ``flowamp_tools.list_agent_frameworks``.
+    Definitions come from the code-defined ``flowamp_compliance_checks.frameworks``
+    registry via ``flowamp_tools.get_framework``; there is no ComplianceFrameworkTable.
+    The per-agent assignments (COMPLIANCE# rows) come from the AgentTable via
+    ``flowamp_tools.list_agent_frameworks``.
     """
     BASELINE_ID = "FLOWAMP_BASELINE"
 
@@ -439,17 +462,15 @@ def run_check(checkId: str, target: dict, params: dict) -> dict:  # noqa: N803
 
 @tool
 def query_athena(sql: str, params: list) -> dict:
-    """Run a query against the curated database. NO-DATA STUB in this deployment.
+    """Run a query against the curated database. Returns no rows in this deployment.
 
-    This repo has NO Athena / Glue curated warehouse, so this tool cannot
-    execute the SQL. Instead of erroring (the agent's system prompt still
-    references query_athena), it degrades gracefully and returns a valid empty
-    result shape with an explanatory note. The returned shape returns rows /
-    rowCount / queryExecutionId plus a ``note`` so the LLM understands why no
-    rows came back and does not treat the absence as a finding.
+    There is no Athena / Glue curated warehouse here, so the SQL is not executed.
+    Rather than erroring, this returns a valid empty result (rows / rowCount /
+    queryExecutionId) plus a ``note`` explaining the absence, so an empty result is
+    not mistaken for a compliance finding.
     """
     _log.info(
-        "query_athena: no Athena warehouse in this deployment — returning empty "
+        "query_athena: no Athena warehouse in this deployment, returning empty "
         "result for SQL: %s", (sql or "")[:200],
     )
     return {
@@ -474,13 +495,13 @@ def read_past_audits(agentId: str, n: int = 5) -> list:  # noqa: N803
 def read_past_overrides(agentId: str, n: int = 10) -> list:  # noqa: N803
     """Return recent human_override events for agentId, newest-first.
 
-    This repo has no Athena warehouse, so this reads ``human_override`` EVENT#
-    rows directly from the single AgentTable. Rows are written by
-    flowamp_tools.log_compliance_event under sk EVENT#<ts>#<id>.
+    With no Athena warehouse, this reads ``human_override`` EVENT# rows straight from
+    the AgentTable; they are written by flowamp_tools.log_compliance_event under sk
+    EVENT#<ts>#<id>.
 
-    Returns list of {eventId, timestamp, workItemId, decision, annotation,
-    linkedComplianceSk, reviewerEmail}. Returns [] on any error or when no rows
-    exist — never raises (the agent's prompt references this tool).
+    Returns a list of {eventId, timestamp, workItemId, decision, annotation,
+    linkedComplianceSk, reviewerEmail}, or [] when there are no rows or on error.
+    Never raises.
     """
     try:
         table = _dynamodb.Table(_agent_table_name)
@@ -519,7 +540,7 @@ def read_past_overrides(agentId: str, n: int = 10) -> list:  # noqa: N803
         return []
 
 
-# ── Access-matrix helpers (U-091) ────────────────────────────────────────────
+# ── Access-matrix helpers ────────────────────────────────────────────────────
 
 def _list_agent_extensions(
     agent_id: str,
@@ -528,18 +549,14 @@ def _list_agent_extensions(
 ) -> list:
     """Shared pagination helper for list_agent_data_access and list_agent_tool_access.
 
-    This repo has NO separate AgentExtensionsTable, so we read the DATA#/TOOL#
-    grant rows straight off the single AgentTable and surface whatever metadata
-    the grant row itself carries (name / description / sensitivityLabel /
-    sensitivityClassification). When that metadata is absent, ``sensitivity`` is
-    None — the "metadata absent" contract the system prompt already handles
-    (do not flag a mismatch on a missing record alone).
+    There is no separate AgentExtensionsTable, so the DATA#/TOOL# grant rows are read
+    straight off the AgentTable, surfacing whatever metadata the grant row carries (name /
+    description / sensitivityLabel / sensitivityClassification). Absent metadata yields
+    ``sensitivity`` None, the "metadata absent" contract the system prompt handles: do not
+    flag a mismatch on a missing record alone.
 
-    Queries AgentTable for rows where sk begins_with sk_prefix (paginated).
-    Never raises.
-
-    id_field is the attribute name to use when deriving the resource ID from the
-    grant row (e.g. 'datasetId' or 'toolId').
+    Paginates over rows whose sk begins with sk_prefix. Never raises. `id_field` is the
+    attribute used to derive the resource id from the grant row ('datasetId', 'toolId').
     """
     from botocore.exceptions import ClientError, ParamValidationError
 
@@ -571,13 +588,12 @@ def _list_agent_extensions(
 
         results: list = []
         for row in grant_rows:
-            # Derive the resource ID from the dedicated attribute first, then
-            # fall back to splitting the sk (e.g. "DATA#abc-123" → "abc-123").
+            # Prefer the dedicated attribute, then fall back to splitting the sk
+            # (e.g. "DATA#abc-123" gives "abc-123").
             resource_id = row.get(id_field) or row.get("sk", "").split("#", 1)[-1]
 
-            # No AgentExtensionsTable in this repo — surface any metadata the
-            # grant row itself carries. Honor the legacy sensitivityClassification
-            # fallback (API service pattern).
+            # Surface whatever metadata the grant row carries, honouring the
+            # sensitivityClassification fallback the API service also accepts.
             sensitivity = row.get("sensitivityLabel") or row.get("sensitivityClassification")
 
             results.append({
@@ -605,16 +621,15 @@ def _list_agent_extensions(
 def list_agent_data_access(agentId: str) -> list:  # noqa: N803
     """Return the agent's data access grants with sensitivity metadata.
 
-    Reads DATA#{datasetId} rows from AgentTable for the given agentId and
-    surfaces name, description, and sensitivity classification carried on each
-    grant row (single-table data model — no separate AgentExtensionsTable join).
+    Reads DATA#{datasetId} rows for the given agentId and surfaces the name,
+    description and sensitivity classification carried on each grant row.
 
-    Returns [{datasetId, name, description, sensitivity, permissionLevel,
-    grantedAt, grantedBy}]. Empty list when no DATA# rows exist; never raises.
+    Returns [{datasetId, name, description, sensitivity, permissionLevel, grantedAt,
+    grantedBy}], or an empty list when no DATA# rows exist. Never raises.
 
-    Use the sensitivity field to reason about whether the agent's access aligns
-    with its declared label. When sensitivity is None the metadata is absent —
-    do not flag a sensitivity mismatch based on a missing record alone.
+    Use the sensitivity field to reason about whether the agent's access matches its
+    declared label. A sensitivity of None means the metadata is absent: do not flag a
+    mismatch based on a missing record alone.
     """
     return _list_agent_extensions(
         agent_id=agentId,
@@ -627,17 +642,16 @@ def list_agent_data_access(agentId: str) -> list:  # noqa: N803
 def list_agent_tool_access(agentId: str) -> list:  # noqa: N803
     """Return the agent's tool/extension access grants with sensitivity metadata.
 
-    Reads TOOL#{toolId} rows from AgentTable for the given agentId and surfaces
-    name, description, and sensitivity classification carried on each grant row
-    (single-table data model — no separate AgentExtensionsTable join).
+    Reads TOOL#{toolId} rows for the given agentId and surfaces the name, description
+    and sensitivity classification carried on each grant row.
 
-    Returns [{toolId, name, description, sensitivity, permissionLevel,
-    grantedAt, grantedBy}]. Empty list when no TOOL# rows exist; never raises.
+    Returns [{toolId, name, description, sensitivity, permissionLevel, grantedAt,
+    grantedBy}], or an empty list when no TOOL# rows exist. Never raises.
 
-    Use the sensitivity field to reason about whether the agent's tool grants
-    match its declared role and output sensitivity. When sensitivity is None the
-    metadata is absent — surface the grant in your narrative but do not treat
-    the absence of metadata as a confirmed mismatch.
+    Use the sensitivity field to reason about whether the agent's tool grants match its
+    declared role and output sensitivity. A sensitivity of None means the metadata is
+    absent: surface the grant in your narrative, but do not treat that absence as a
+    confirmed mismatch.
     """
     return _list_agent_extensions(
         agent_id=agentId,
@@ -650,17 +664,16 @@ def list_agent_tool_access(agentId: str) -> list:  # noqa: N803
 def create_work_item(title: str, priority: str, escalationGroup: str, payload: dict) -> str:  # noqa: N803
     """Create a human-review work item for an escalation finding.
 
-    This repo has no AOP runtime / WorkItemTable, so the underlying
-    ``flowamp_tools.create_work_item`` is a safe NO-OP that returns a
-    synthetic (non-persisted) workItemId. This adapter still serialises the
-    escalation ``payload`` into the instructions body so the call shape is
-    preserved and any future real implementation would receive the full context.
-    Returns the workItemId string.
+    With no AOP runtime or WorkItemTable, the underlying
+    ``flowamp_tools.create_work_item`` is a no-op returning a synthetic,
+    non-persisted workItemId. This adapter still serialises the escalation ``payload``
+    into the instructions body so the call shape holds and a future real implementation
+    receives the full context. Returns the workItemId string.
     """
     criteria = payload.get("criteria", "")
     explicit_instructions = payload.get("instructions") or criteria
 
-    # Stable, human-readable rendering of the audit payload.
+    # Human-readable rendering of the audit payload.
     extra_keys = [k for k in payload if k not in ("instructions", "criteria")]
     payload_lines = [f"- {k}: {payload[k]!r}" for k in extra_keys]
     instructions = explicit_instructions
@@ -703,20 +716,20 @@ def finalize_audit(
     recommendations: list,
     escalations: list,
 ) -> dict:
-    """Atomically commit an audit run: AUDIT row, compliance_audit event, escalation work items.
+    """Atomically commit an audit run: AUDIT row, compliance_audit event, escalation
+    work items.
 
-    Required argument shapes (the LLM should construct these without trial-
-    and-error; validators below enforce them strictly):
+    Argument shapes, enforced strictly by the validators below:
 
-      agentId: str — the agent under audit. Same value the dispatch payload
-        carried under workItem.info.payload.agentId.
+      agentId: str - the agent under audit; the value the dispatch payload carried
+        under workItem.info.payload.agentId.
 
       byFramework: dict[frameworkId, {score, criticalFailures, highFailures, checks}]
-        - score: float in [0.0, 1.0]. Numeric — do NOT stringify.
-        - criticalFailures: int — count of severity=critical check failures for this framework.
-        - highFailures: int — count of severity=high check failures.
-        - checks: list[{checkId, result, severity}] — one entry per check this
-          framework requires. result ∈ {'pass', 'fail', 'skip'}.
+        - score: float in [0.0, 1.0]. Numeric, not a string.
+        - criticalFailures: int - severity=critical check failures for this framework.
+        - highFailures: int - severity=high check failures.
+        - checks: list[{checkId, result, severity}] - one entry per check the framework
+          requires. result is one of 'pass', 'fail', 'skip'.
         Example:
           {
             "FLOWAMP_BASELINE": {
@@ -728,32 +741,30 @@ def finalize_audit(
             "nist-ai-rmf": { ... },
           }
 
-      narrative: str (≤ 4000 chars) — what was checked, what was found, patterns
-        observed across history. Cite check IDs and override decisions where
-        relevant.
+      narrative: str, at most 4000 chars - what was checked, what was found, and
+        patterns across history. Cite check IDs and override decisions.
 
       recommendations: list[{checkId, severity, recommendation, frameworks}]
-        - checkId: str — the failing check this remediates (or '' for cross-cutting).
-        - severity: str ∈ {'critical', 'high', 'medium', 'low'}.
-        - recommendation: str — 1-3 sentence remediation step.
-        - frameworks: list[str] — framework ids this rec applies to.
+        - checkId: str - the failing check this remediates ('' for cross-cutting).
+        - severity: str, one of 'critical', 'high', 'medium', 'low'.
+        - recommendation: str - a 1-3 sentence remediation step.
+        - frameworks: list[str] - framework ids this applies to.
 
       escalations: list[{group, criteria, title, priority, payload}]
-        - group: str — escalation group id. NOT 'escalationGroup'.
-        - criteria: str — short reason this escalation fires (≤ 200 chars).
-        - title: str — work-item title.
-        - priority: str ∈ {'critical', 'high', 'medium', 'low'}.
-        - payload: dict — optional context the receiving group will see on
-          the work item. May be empty {}.
+        - group: str - escalation group id. Not 'escalationGroup'.
+        - criteria: str - why this escalation fires, at most 200 chars.
+        - title: str - work-item title.
+        - priority: str, one of 'critical', 'high', 'medium', 'low'.
+        - payload: dict - optional context shown on the work item; may be {}.
 
-    Steps (best-effort atomic — AUDIT row is written first for durability):
+    Steps (best-effort atomic; the AUDIT row is written first for durability):
     1. Validate inputs.
-    2. Compute per-framework Grades + compositeGrade against FLOWAMP_BASELINE rubric.
-    3. Write AUDIT#{ts} row (via flowamp_tools.write_audit_report → single table).
-    4. Emit compliance_audit EVENT# row (via flowamp_tools.log_compliance_event).
-    5. Create one work item per escalation entry (no-op create_work_item); collect IDs.
-    6. Patch AUDIT row with escalatedWorkItems list.
-    7. Close the dispatch work item (no-op close_assigned_work_item).
+    2. Compute per-framework grades and compositeGrade against the FLOWAMP_BASELINE rubric.
+    3. Write the AUDIT#{ts} row via flowamp_tools.write_audit_report.
+    4. Emit the compliance_audit EVENT# row via flowamp_tools.log_compliance_event.
+    5. Create one work item per escalation entry (a no-op here) and collect the ids.
+    6. Patch the AUDIT row with the escalatedWorkItems list.
+    7. Close the dispatch work item (a no-op here).
     8. Return {auditSk, workItemIds, failures, eventId, dispatchWorkItemId}.
     """
     audit_sk = None
@@ -764,7 +775,7 @@ def finalize_audit(
     close_status = "done"
     close_error_message = None
     try:
-        # Normalise common LLM aliases before strict validation.
+        # Normalise the common 'escalationGroup' alias before strict validation.
         if isinstance(escalations, list):
             for esc in escalations:
                 if isinstance(esc, dict) and "group" not in esc and "escalationGroup" in esc:
@@ -877,13 +888,12 @@ def finalize_audit(
     except Exception as exc:
         close_status = "failure"
         close_error_message = f"{type(exc).__name__}: {exc}"
-        _log.exception("finalize_audit: aborted for agent %s — %s", agentId, exc)
+        _log.exception("finalize_audit: aborted for agent %s - %s", agentId, exc)
         raise
     finally:
-        # Always close the dispatch work item (when bound). No-op in this
-        # deployment, but the call shape is preserved so a future AOP runtime
-        # integration works unchanged. Closing is best-effort: a close failure is
-        # logged but never masks the original exception.
+        # Always close the dispatch work item when one is bound - a no-op in this
+        # deployment, but the call shape is preserved. Best-effort: a close failure is
+        # logged and never masks the original exception.
         if _dispatch_work_item_id:
             if close_status == "done":
                 close_note = (
@@ -947,12 +957,10 @@ def reset_run_context() -> None:
 
 
 # ── Dispatch work-item binding ────────────────────────────────────────────────
-#
-# When the agent is invoked with a workItemId (AOP-style dispatch), the value is
-# stashed here (set by main.invoke() and read by finalize_audit) so the audit
-# commit and the work-item close become a single atomic gesture. In this repo
-# the close is a no-op (no AOP runtime), but the binding is preserved so the
-# code path — and any future real implementation — works unchanged.
+# When the agent is invoked with a workItemId (AOP-style dispatch), the value is stashed
+# here (set by main.invoke(), read by finalize_audit) so the audit commit and the
+# work-item close become a single atomic gesture. The close is a no-op in this repo (no
+# AOP runtime), but the binding keeps the code path working unchanged.
 
 _dispatch_work_item_id = None  # type: ignore[assignment]
 

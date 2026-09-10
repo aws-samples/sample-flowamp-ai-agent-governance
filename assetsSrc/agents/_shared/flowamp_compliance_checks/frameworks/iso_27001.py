@@ -25,7 +25,7 @@ ISO_27001_TEMPLATE: dict = {
             },
             "transparency": {
                 "checks": ["bedrock-invocation-logging"],
-                # Deferred to U-079: "prompt-versioning"
+                # Not yet implemented: "prompt-versioning".
                 "weights": {
                     "bedrock-invocation-logging": 1.0,
                 },

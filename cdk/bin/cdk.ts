@@ -10,17 +10,23 @@ const app = new cdk.App();
 
 // Deploys into any account/region via the standard `cdk bootstrap` + `cdk deploy` flow.
 // env resolves from the ambient AWS credentials/region (CDK_DEFAULT_* set by the CLI).
-const teamStack = new TeamStack(app, "TeamStack", {
+//
+// The construct id is also the CloudFormation stack name. Renaming it does not rename an
+// existing deployment: CDK treats the new id as a different stack and creates it alongside
+// the old one, and several resources carry fixed account-unique names that do not move with
+// the stack name (the AgentCore gateway, the management harness, the two scanner runtimes),
+// so the parallel deploy fails on those collisions. Delete the previous stack before renaming.
+const teamStack = new TeamStack(app, "FLOWAMP", {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
   },
 });
 
-// Security scanning (cdk-nag AwsSolutions ruleset): enable with `-c cdkNag=true`.
-// Off by default so it never affects normal deploys. Findings that are accepted
-// risks for this SAMPLE are documented as stack-level suppressions below; genuine
-// hardening (e.g. S3 enforceSSL) is fixed in the stack, not suppressed.
+// Security scanning (cdk-nag AwsSolutions ruleset): enable with `-c cdkNag=true`. Off by
+// default so it never affects normal deploys. Findings that are accepted risks for a sample
+// are documented as stack-level suppressions below; genuine hardening (for example S3
+// enforceSSL) is fixed in the stack rather than suppressed.
 if (app.node.tryGetContext("cdkNag") === "true") {
   cdk.Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
 

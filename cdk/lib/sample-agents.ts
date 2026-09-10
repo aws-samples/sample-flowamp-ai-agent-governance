@@ -8,28 +8,25 @@ import { Construct } from "constructs";
 /**
  * The three illustrative sample workload agents, and the code that deploys one.
  *
- * Single source of truth: these agents are deployed BOTH inside TeamStack (behind
- * `-c deploySampleAgents=true`) and by the standalone SampleAgentsStack, which is
- * used to give a FlowAMP instance running elsewhere real cross-account agents to
- * discover. Defining them twice meant two copies to keep in step.
+ * Defined here once so both consumers share a single source of truth: TeamStack (behind
+ * `-c deploySampleAgents=true`) and the standalone SampleAgentsStack, which gives a FlowAMP
+ * instance running elsewhere real cross-account agents to discover.
  *
- * They are tool-less AgentCore HARNESSES. Their work is prompt-shaped (summarize,
- * classify, recommend) with no AWS calls, so the managed agent loop does the job
- * with no container, no code bundle and no dependency vendoring.
+ * They are tool-less AgentCore harnesses. Their work is prompt-shaped (summarize, classify,
+ * recommend) with no AWS calls, so the managed agent loop does the job with no container,
+ * no code bundle and no dependency vendoring.
  *
- * RESPONSIBLE AI / GUARDRAIL GUIDANCE
- * These are illustrative, non-production samples that exist to give the governance
- * platform real deployed agents to discover and govern. They are NOT production
- * decision-makers, and each carries an in-prompt responsible-use disclaimer telling
- * the model to behave as a non-authoritative assistant. One operates in a regulated
- * domain (insurance claims triage); its outputs are not coverage or claims decisions.
- * A production deployment should attach an Amazon Bedrock Guardrail and keep a
- * qualified human in the loop for all final decisions.
+ * Responsible AI: these are illustrative, non-production samples whose only purpose is to
+ * give the governance platform real deployed agents to discover and govern. Each carries an
+ * in-prompt responsible-use disclaimer telling the model to behave as a non-authoritative
+ * assistant, and one operates in a regulated domain (insurance claims triage) where its
+ * outputs are not coverage or claims decisions. A production deployment should attach an
+ * Amazon Bedrock Guardrail and keep a qualified human in the loop for all final decisions.
  */
 export interface SampleAgentDef {
   /** Construct id. */
   readonly id: string;
-  /** Harness name — alphanumerics and underscores only, no hyphens. */
+  /** Harness name - alphanumerics and underscores only, no hyphens. */
   readonly harnessName: string;
   /** Registry-facing id (hyphenated form), used for cost-allocation tags. */
   readonly agentId: string;
@@ -99,9 +96,8 @@ reviewer must confirm consequential actions.`,
 /**
  * Create one sample harness with its own execution role, and return its ARN.
  *
- * Each agent gets a SEPARATE role so inspecting one sample's permissions shows only
- * that agent's access — and revoking one in a lifecycle demo does not affect the
- * others.
+ * Each agent gets a separate role, so inspecting one sample's permissions shows only that
+ * agent's access and revoking one in a lifecycle demo does not affect the others.
  */
 export function addSampleHarness(
   scope: Construct,
@@ -136,11 +132,11 @@ export function addSampleHarness(
       resources: ["*"],
     })
   );
-  // A harness enables managed memory BY DEFAULT and provisions the memory resource
-  // itself, named harness_<harnessName>_<suffix>. Without these actions the very
-  // FIRST invoke fails with AccessDeniedException on ListEvents, because the harness
-  // reads conversation history before it answers. The AgentCore docs' sample
-  // execution-role policy omits memory entirely, so it must be granted explicitly.
+  // A harness enables managed memory by default and provisions the memory resource itself,
+  // named harness_<harnessName>_<suffix>. Without these actions the first invoke fails with
+  // AccessDeniedException on ListEvents, because the harness reads conversation history
+  // before it answers. The AgentCore docs' sample execution-role policy omits memory, so it
+  // must be granted explicitly.
   role.addToPrincipalPolicy(
     new iam.PolicyStatement({
       actions: [
@@ -203,17 +199,15 @@ export function addSampleHarness(
       bedrockModelConfig: { modelId: inferenceProfileId, maxTokens: 1024 },
     },
     systemPrompt: [{ text: def.systemPrompt }],
-    // These agents declare NO tools, but allowedTools defaults to "*", which
-    // implicitly grants the harness's BUILT-IN tools — including `shell` and
-    // `file_operations` (arbitrary command execution in the session microVM). An
-    // empty allowlist is the least-privilege posture for an agent that only answers
-    // from its system prompt, and it is the behaviour the governance story teaches:
-    // an agent gets exactly the tools its job requires.
+    // These agents declare no tools, but allowedTools defaults to "*", which implicitly
+    // grants the harness's built-in tools, including `shell` and `file_operations`
+    // (arbitrary command execution in the session microVM). An empty allowlist is the
+    // least-privilege posture for an agent that only answers from its system prompt.
     allowedTools: [],
     maxIterations: 4,
     timeoutSeconds: 60,
-    // Distinct owners so the chargeback view spans several cost centres rather than
-    // landing everything in one bucket.
+    // Distinct owners so the chargeback view spans several cost centres rather than landing
+    // everything in one bucket.
     tags: [
       { key: "AgentId", value: def.agentId },
       { key: "BusinessUnit", value: def.businessUnit },

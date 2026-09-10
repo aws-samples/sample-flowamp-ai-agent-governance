@@ -472,7 +472,7 @@
             <div class="nav-item" onclick="showTab('catalog',this)"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="5" r="3"/><path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5"/><circle cx="12" cy="4" r="1.5"/></svg></span><span class="nav-label">Agent Catalog</span></div>
             <div class="nav-item" onclick="showTab('aops',this)"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 2h12v12H2z"/><path d="M5 6h6M5 8.5h6M5 11h3"/></svg></span><span class="nav-label">AOP</span></div>
             <div class="sidebar-section-label">Operations</div>
-            <div class="nav-item" onclick="showTab('agentRegistry',this)"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="5" r="3"/><circle cx="12" cy="5" r="2"/><circle cx="8.5" cy="12" r="2.5"/><path d="M7.5 6.5l-1 3.5M9.5 6.5l1 3.5"/></svg></span><span class="nav-label">Agent Registry</span><span class="nav-badge" id="regNavBadge">0</span></div>
+            <div class="nav-item" onclick="showTab('agentRegistry',this)"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="5" r="3"/><circle cx="12" cy="5" r="2"/><circle cx="8.5" cy="12" r="2.5"/><path d="M7.5 6.5l-1 3.5M9.5 6.5l1 3.5"/></svg></span><span class="nav-label">Agent Discovery</span><span class="nav-badge" id="regNavBadge">0</span></div>
             <div class="nav-item" onclick="showTab('liveMetrics',this)"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6.5"/><path d="M8 4v4l3 2"/></svg></span><span class="nav-label">AgentCore</span></div>
             <div class="nav-item" onclick="showTab('conversations',this)"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 3h12v8H5l-3 3V3z"/><path d="M5 6h6M5 8.5h4"/></svg></span><span class="nav-label">Conversations</span></div>
             <div class="nav-item" onclick="showTab('testHarness',this)"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 1v4l-3 6c-.3.7.2 1.5 1 1.5h8c.8 0 1.3-.8 1-1.5L10 5V1"/><path d="M5 1h6"/></svg></span><span class="nav-label">Evaluations</span><span class="nav-badge" id="approvalNavBadge" style="display:none">0</span></div>
@@ -721,7 +721,7 @@
                         <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Description</label><textarea id="regDesc" class="search-bar" style="margin:0;height:60px;resize:vertical;font-family:inherit" placeholder="What does this agent do?"></textarea></div>
                         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
                             <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Model</label><select id="regModel" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>Claude Sonnet 4</option><option>Claude Haiku 3.5</option><option>Titan Text Premier</option><option>Custom / Fine-tuned</option></select></div>
-                            <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Runtime</label><select id="regRuntime" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>AgentCore Harness</option><option>AgentCore Runtime</option><option>Bedrock Agent Classic</option><option>Lambda</option><option>External API</option></select></div>
+                            <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Runtime</label><select id="regRuntime" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>AgentCore Harness</option><option>AgentCore Runtime</option><option>Bedrock Agent Classic</option><option>Lambda</option><option>Foundry Prompt Agent</option><option>Foundry Hosted Agent</option><option>External API</option></select></div>
                             <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Compliance</label><select id="regCompliance" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>ISO 27001 Controlled</option><option>Standard</option><option>Public</option></select></div>
                         </div>
                         <button onclick="registerAgent()" style="background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s">Submit for Registration</button>
@@ -730,7 +730,7 @@
                 <div class="catalog-section">
                     <div class="section-header"><h2 class="section-title">Platform Integrations</h2></div>
                     <div id="regIntegrations" style="display:flex;flex-direction:column;gap:8px"></div>
-                    <button onclick="openConnectPlatform()" style="margin-top:12px;background:none;border:1px dashed #3a4e66;color:#58a6ff;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;width:100%">+ Connect New Platform</button>
+                    <button onclick="openConnectPlatform()" style="margin-top:12px;background:none;border:1px dashed #3a4e66;color:#58a6ff;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;width:100%">+ Configure Connector</button>
                     <button onclick="syncDiscovery()" style="margin-top:8px;background:none;border:1px solid #3a4e66;color:#58a6ff;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;width:100%">Sync now</button>
                 </div>
             </div>
@@ -739,13 +739,14 @@
                 <input type="text" id="regSearch" class="search-bar" style="margin-bottom:12px" placeholder="🔍 Filter agents by name, category, system, or owner..." oninput="searchRegistry(this.value)">
                 <div class="filter-bar" id="regFilterBar">
                     <button class="filter-btn active" onclick="filterRegistry('all',this)">All</button>
-                    <button class="filter-btn" onclick="filterRegistry('active',this)">🟢 Active</button>
+                    <button class="filter-btn" onclick="filterRegistry('active',this)">🟢 Registered</button>
                     <button class="filter-btn" onclick="filterRegistry('pending',this)">🟡 Pending</button>
                     <button class="filter-btn" onclick="filterRegistry('decommissioned',this)">⚫ Decommissioned</button>
                     <button class="filter-btn" onclick="filterRegistry('external',this)">🔗 External</button>
+                    <button class="filter-btn" onclick="filterRegistry('drift',this)" title="Agents whose platform run state disagrees with their FlowAMP governance status">⚠️ Drift <span id="regDriftCount"></span></button>
                 </div>
                 <div class="finops-wrap"><table class="finops-table"><thead><tr>
-                    <th>Agent</th><th>Category</th><th>System</th><th>Status</th><th>Runtime</th><th>Registered</th><th>Owner</th><th>Actions</th>
+                    <th>Agent</th><th>Category</th><th>Platform</th><th>Account</th><th>Status</th><th>Runtime</th><th>Registered</th><th>Owner</th><th>Actions</th>
                 </tr></thead><tbody id="regTable"></tbody></table></div>
             </div>
         </div>        <div id="liveMetrics" class="tab-content" style="display:none;">
@@ -1272,16 +1273,43 @@
     </div>
     <div id="complianceModal" class="modal"><div class="modal-content" id="complianceModalContent"></div></div>
     <div id="connectModal" class="modal"><div class="modal-content" style="max-width:500px">
-        <div class="modal-header"><h2>Connect Platform</h2><span class="close" onclick="document.getElementById('connectModal').style.display='none'">&times;</span></div>
+        <div class="modal-header"><h2 id="connectTitle">Connect Platform</h2><span class="close" onclick="document.getElementById('connectModal').style.display='none'">&times;</span></div>
+        <!-- Microsoft Foundry connector configuration. The field set mirrors PUT
+             /discovery/connectors/{platform}: one connector per Azure tenant, so an
+             Entra ID app registration (tenant + client + secret) is the entire input.
+             No project field, because the sweep walks whatever subscriptions, accounts
+             and projects the service principal can reach. -->
         <div style="display:flex;flex-direction:column;gap:12px">
-            <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Platform Name</label><input id="connectName" class="search-bar" style="margin:0" placeholder="e.g. Schneider EcoStruxure"></div>
-            <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Endpoint URL</label><input id="connectUrl" class="search-bar" style="margin:0" placeholder="https://api.platform.com/v1"></div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-                <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Auth Type</label><select id="connectAuth" class="persona-select" style="width:100%;padding:12px 16px;border-radius:8px;font-size:13px"><option>OAuth 2.0</option><option>API Key</option><option>mTLS</option><option>IAM Role</option></select></div>
-                <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Expected Agents</label><input id="connectAgents" class="search-bar" style="margin:0" placeholder="e.g. 3" type="number" value="1"></div>
+                <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Tenant ID</label><input id="connectTenantId" class="search-bar" style="margin:0" placeholder="Entra ID directory (tenant) ID"></div>
+                <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Client ID</label><input id="connectClientId" class="search-bar" style="margin:0" placeholder="App registration (client) ID"></div>
             </div>
+            <div><label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Client Secret</label><input id="connectClientSecret" class="search-bar" style="margin:0" type="password" autocomplete="new-password" placeholder="Client secret value"><div id="connectSecretHint" style="font-size:12px;color:#9aacbe;margin-top:4px">Stored encrypted server-side and never returned to this page.</div></div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#dee4ea"><input id="connectEnabled" type="checkbox" checked style="width:14px;height:14px">Enabled (include this connector in scheduled discovery)</label>
             <div id="connectStatus" style="display:none;padding:12px;border-radius:8px;font-size:13px"></div>
-            <button id="connectBtn" onclick="connectPlatform()" style="background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Connect Platform</button>
+            <div style="display:flex;gap:8px">
+                <button id="connectTestBtn" onclick="testPlatformConnection()" style="flex:1;background:none;border:1px solid #3a4e66;color:#58a6ff;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Test connection</button>
+                <button id="connectBtn" onclick="connectPlatform()" style="flex:1;background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Connect Platform</button>
+            </div>
+        </div>
+    </div></div>
+    <!-- Owner prompt shown when Approve/Activate is clicked on an agent with no owner.
+         POST /agents/{id}/lifecycle returns 422 without a named owner. Collecting it
+         here sends the owner and the transition in one call, so a rejected activation
+         cannot leave a half-applied owner. -->
+    <div id="ownerModal" class="modal"><div class="modal-content" style="max-width:460px">
+        <div class="modal-header"><h2>Assign an owner</h2><span class="close" onclick="closeOwnerPrompt()">&times;</span></div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+            <div id="ownerPromptAgent" style="font-size:13px;color:#dee4ea"></div>
+            <div>
+                <label style="font-size:12px;color:#9aacbe;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px">Owner</label>
+                <input id="ownerPromptInput" class="search-bar" style="margin:0" placeholder="Team or person accountable for this agent" onkeydown="if(event.key==='Enter')confirmOwnerActivation()">
+                <div id="ownerPromptHint" style="font-size:12px;color:#9aacbe;margin-top:4px">Required before activation. Activation is where a human takes responsibility for the agent, so discovery never fills this in for you.</div>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button onclick="closeOwnerPrompt()" style="flex:1;background:none;border:1px solid #3a4e66;color:#dee4ea;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Cancel</button>
+                <button onclick="confirmOwnerActivation()" style="flex:1;background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Save owner and activate</button>
+            </div>
         </div>
     </div></div>    </div><!-- /app-body -->
     <!-- Mobile bottom nav -->
@@ -1311,9 +1339,8 @@ const AUTH_TOKEN_KEY = 'flowamp_id_token';
 function getIdToken() { try { return sessionStorage.getItem(AUTH_TOKEN_KEY); } catch (e) { return null; } }
 
 // ── Proactive session expiry ──────────────────────────────────────────────
-// Cognito ID tokens are JWTs carrying an `exp` (seconds since epoch). Rather than
-// wait for an API call to bounce with 401, we read exp and log the user out the
-// moment the token expires — even while idle.
+// Cognito ID tokens carry an `exp` claim (seconds since epoch). Reading it lets an idle
+// session log out the moment the token expires, rather than on the next 401.
 let _authExpiryTimer = null;
 function _jwtExpMs(token) {
     try {
@@ -1409,9 +1436,9 @@ async function doLogin(ev) {
     }
     return false;
 }
-// On load, gate the app behind the overlay unless we already hold a valid token.
-// A token persisted in sessionStorage may have expired since the last visit, so
-// arm the expiry timer (which logs out immediately if it is already past exp).
+// Gate the app behind the overlay unless a token is already held. A token persisted in
+// sessionStorage may have expired since the last visit, so arm the expiry timer, which
+// logs out immediately when it is already past exp.
 document.addEventListener('DOMContentLoaded', function() {
     if (getIdToken()) { hideLoginOverlay(); scheduleAuthExpiry(); } else { showLoginOverlay(); }
 });
@@ -1465,9 +1492,13 @@ const agentCategories = [
 ];
 const iconMap = {"Operations":"⚡","Asset & Infrastructure":"🔧","Finance & Trading":"📈","Security & Compliance":"🛡️","Customer Operations":"👥","External Platforms":"🔗"};
 
-// Live-only by default: FinOps cost is sourced from the Cost Explorer COST# rows
-// (GET /costs → liveCostRows). No inline synthetic cost data — the dashboard shows
-// real spend, or an empty/pending state until the collector writes rows.
+// FinOps cost comes from the Cost Explorer COST# rows (GET /costs). No inline synthetic
+// data, so the dashboard shows real spend or an empty state until the collector runs.
+// XSS boundary: the renderers for these three arrays interpolate their fields into
+// innerHTML WITHOUT esc(), which is only safe because every value here is a literal
+// written in this file. If any of them is ever populated from an API response, those
+// render sites become injection points and must be esc()-wrapped first. The one semgrep
+// finding covering this file is block-level and dismissed, so no scanner will catch it.
 const finopsData = [];
 
 const accessRoles = [
@@ -1490,6 +1521,11 @@ const accessPerms = {
 const permLabel = {full:"Full",read:"Read",exec:"Execute",none:"None",audit:"Audit"};
 
 
+// XSS boundary: the renderers for these three arrays interpolate their fields into
+// innerHTML WITHOUT esc(), which is only safe because every value here is a literal
+// written in this file. If any of them is ever populated from an API response, those
+// render sites become injection points and must be esc()-wrapped first. The one semgrep
+// finding covering this file is block-level and dismissed, so no scanner will catch it.
 const aopsData = [
     { id:"AOP-01", name:"Service Degradation Response", status:"active", sop:"SOP-OPS-01", agents:["Service Health Monitor","Production Line Monitor"], executions:12450, successRate:97.8, lastRun:"15 sec ago", owner:"Operations",
       entry:"Service latency exceeds SLA threshold for 5 consecutive minutes",
@@ -1558,8 +1594,8 @@ const personas = {
     risk_mgr:     { name:"Sandra Kim",          icon:"🎯", role:"Risk Manager",                 tabs:["dashboard","access","auditLog","annotations","chat"],               focus:"NIST AI RMF scores, risk posture across agent classes" },
     auditor:      { name:"Robert Chang",        icon:"🔍", role:"Internal Auditor",             tabs:["dashboard","access","aops","auditLog","annotations","conversations","chat"], focus:"Evidence collection, control effectiveness, audit trail" }
 };
-// Compliance is now a real, dedicated view (fleet audit grades from the scanner),
-// so persona tab references to "compliance" resolve to it directly (no alias).
+// Compliance is a real view (fleet audit grades from the scanner), so persona tab
+// references to it need no alias.
 const tabAliases = {};
 
 // Persona-specific KPIs
@@ -1589,7 +1625,7 @@ function updateDashboardKPIs(personaKey) {
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     grid.innerHTML = kpis.map(k => `<div class="metric-card"><div class="metric-label">${k.label}</div><div class="metric-value ${k.color}">${k.value}</div><div class="metric-status">${k.sub}</div></div>`).join('');
 }
-const tabTitles = { dashboard:'Dashboard', catalog:'Agent Catalog', compliance:'Compliance', finops:'FinOps', access:'Access Matrix', aops:'Agent Operating Policies', agentRegistry:'Agent Registry', liveMetrics:'AgentCore', conversations:'Conversation Store', auditLog:'Audit Log', testHarness:'Evaluations', playground:'Prompt Lab', datasets:'Datasets & Experiments', annotations:'Annotation Queue', chat:'Agent Chat' };
+const tabTitles = { dashboard:'Dashboard', catalog:'Agent Catalog', compliance:'Compliance', finops:'FinOps', access:'Access Matrix', aops:'Agent Operating Policies', agentRegistry:'Agent Discovery', liveMetrics:'AgentCore', conversations:'Conversation Store', auditLog:'Audit Log', testHarness:'Evaluations', playground:'Prompt Lab', datasets:'Datasets & Experiments', annotations:'Annotation Queue', chat:'Agent Chat' };
 
 function toggleSidebar() {
     const sb = document.getElementById('sidebar');
@@ -1649,26 +1685,61 @@ function mobileNav(tabName, el) {
 function filterScores(level, el) {
     document.querySelectorAll('#scoreFilterBar .filter-btn').forEach(b => b.classList.remove('active'));
     el.classList.add('active');
-    renderAIScores(aiScoresData.filter(a => level==='all'||level==='high'&&a.score>=95||level==='mid'&&a.score>=92&&a.score<95||level==='low'&&a.score<92));
+    // The high/mid/low bands are score ranges, so a not-scored agent belongs to none of
+    // them; it would otherwise fall into "low" on a score it was never given.
+    renderAIScores(aiScoresData.filter(a => level==='all'||!raiNotScored(a)&&(level==='high'&&a.score>=95||level==='mid'&&a.score>=92&&a.score<95||level==='low'&&a.score<92)));
 }
 function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// ── Responsible AI "not scored" ───────────────────────────────────────────────
+// The scorer can only grade agents whose prompts, guardrails and traces it can read on
+// AWS; anything else is marked raiScoreStatus:'not-scored' with a reason. Every render
+// site must branch on this, because a 0 would read as a genuine failing grade.
+function raiNotScored(a) { return !!a && a.raiScoreStatus === 'not-scored'; }
+// The scorer writes a short kebab-case token; these are the sentences a reader gets. The
+// distinction matters: "no signals yet" is a temporary state that resolves once the agent runs,
+// while the platform reasons are permanent for that agent. An unmapped token falls back to
+// itself so a new reason surfaces visibly rather than silently reading as generic.
+const _RAI_REASONS = {
+    'no-signal': 'Not scored yet: this agent has no guardrail activity or CloudTrail events to measure. It will be scored once it starts handling traffic.',
+    'platform-unsupported': 'Not scored: Responsible AI scoring reads Bedrock Guardrails and CloudTrail, which this platform does not expose.',
+    'platform-cross-account': 'Not scored: this agent runs in another AWS account, where its guardrail metrics and CloudTrail events live.',
+    'platform-unknown': 'Not scored: no platform is recorded for this agent, so the scorer cannot tell which signals to read.',
+};
+function raiReason(a) {
+    const t = (a && a.raiScoreReason) || '';
+    return _RAI_REASONS[t] || t || 'Not scoreable by the Responsible AI scorer';
+}
+// Muted "not scored" label with the reason as a tooltip. `size` is the font-size for the
+// render site: score columns use larger type than inline metadata.
+function raiNotScoredHtml(a, size) {
+    return `<span style="color:#7a8a9c;font-size:${size||'12px'};font-weight:600" title="${esc(raiReason(a))}">not scored</span>`;
+}
+
 function renderAIScores(data) {
-    const sorted = [...data].sort((a,b)=>b.score-a.score);
-    const avg = (sorted.reduce((s,a)=>s+a.score,0)/sorted.length).toFixed(1);
+    // Not-scored agents are held out of every statistic: averaging, bucketing or ranking an
+    // agent the scorer refused to grade invents a number for it.
+    const unscored = data.filter(raiNotScored);
+    const sorted = data.filter(a=>!raiNotScored(a)).sort((a,b)=>b.score-a.score);
+    const avg = sorted.length ? (sorted.reduce((s,a)=>s+a.score,0)/sorted.length).toFixed(1) : '—';
     const max = sorted[0], atRisk = sorted.filter(a=>a.score<92).length;
     const buckets = [{label:'96–100',min:96,max:100,color:'#3fb950'},{label:'92–95',min:92,max:95,color:'#58a6ff'},{label:'88–91',min:88,max:91,color:'#d29922'},{label:'< 88',min:0,max:87,color:'#f85149'}];
     buckets.forEach(b=>b.count=sorted.filter(a=>a.score>=b.min&&a.score<=b.max).length);
     const maxB=Math.max(...buckets.map(b=>b.count),1);
-    // Summary
+    // "Total Agents" counts the whole list, scored or not, so the tile row adds up. Avg and
+    // Highest show a dash when nothing in view is scored.
     let h=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">`+
-        [{v:avg,c:'#3fb950',l:'Avg Score'},{v:sorted.length,c:'#58a6ff',l:'Total Agents'},{v:atRisk,c:atRisk?'#d29922':'#3fb950',l:'At Risk (<92)'},{v:max.score,c:'#3fb950',l:'Highest'}]
+        [{v:avg,c:'#3fb950',l:'Avg Score'},{v:data.length,c:'#58a6ff',l:'Total Agents'},{v:atRisk,c:atRisk?'#d29922':'#3fb950',l:'At Risk (<92)'},{v:max?max.score:'—',c:'#3fb950',l:'Highest'}]
         .map(m=>`<div style="background:#0d1117;border:1px solid #2e4058;border-radius:8px;padding:12px;text-align:center"><div style="font-size:22px;font-weight:800;color:${m.c}">${m.v}</div><div style="font-size:10px;color:#8b95a1;text-transform:uppercase;letter-spacing:.5px">${m.l}</div></div>`).join('')+`</div>`;
     // Distribution
     h+=`<div style="display:flex;align-items:flex-end;gap:8px;height:72px;margin-bottom:4px">${buckets.map(b=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><span style="font-size:13px;font-weight:700;color:${b.color}">${b.count}</span><div style="width:100%;height:${Math.max(Math.round(b.count/maxB*56),4)}px;background:${b.color};border-radius:4px 4px 0 0;opacity:.85"></div></div>`).join('')}</div>`;
     h+=`<div style="display:flex;gap:8px;margin-bottom:16px">${buckets.map(b=>`<div style="flex:1;text-align:center;font-size:10px;color:#8b95a1">${b.label}</div>`).join('')}</div>`;
     // Row renderer
     const row=a=>{
+        // A not-scored agent gets no score colour and no sub-score bars: there are none to
+        // draw, and empty bars would read as zeros.
+        if(raiNotScored(a))
+            return `<div class="agent-item" onclick="showAgentDetail('${esc(a.name)}')" style="padding:10px 14px"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4;margin-bottom:4px">${esc(a.name)}</div><div style="font-size:11px;color:#7a8a9c">${esc(raiReason(a))}</div></div><div style="min-width:36px;text-align:right">${raiNotScoredHtml(a,'13px')}</div></div>`;
         const sc=a.score>=95?'#3fb950':a.score>=92?'#58a6ff':'#d29922';
         const bars=[{l:'F',v:a.fairness},{l:'T',v:a.transparency},{l:'A',v:a.accountability},{l:'E',v:a.ethics}].map(d=>{
             const c=d.v>=95?'#3fb950':d.v>=92?'#58a6ff':'#d29922';
@@ -1676,17 +1747,26 @@ function renderAIScores(data) {
         }).join('');
         return `<div class="agent-item" onclick="showAgentDetail('${esc(a.name)}')" style="padding:10px 14px"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4;margin-bottom:4px">${esc(a.name)}</div><div style="display:flex;gap:6px">${bars}</div></div><div style="font-size:20px;font-weight:800;color:${sc};min-width:36px;text-align:right">${a.score}</div></div>`;
     };
-    // Top 5
-    h+=`<div style="font-size:11px;color:#3fb950;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">▲ Top Performers</div>`;
-    h+=sorted.slice(0,5).map(row).join('');
+    // Top 5. Headers are suppressed when nothing in view is scored.
+    if(sorted.length){
+        h+=`<div style="font-size:11px;color:#3fb950;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">▲ Top Performers</div>`;
+        h+=sorted.slice(0,5).map(row).join('');
+    }
     // Middle (collapsed)
     if(sorted.length>10){
         h+=`<div style="text-align:center;padding:8px;color:#7a8a9c;font-size:11px;cursor:pointer;border:1px dashed #2e4058;border-radius:6px;margin:6px 0" onclick="var n=this.nextElementSibling;n.style.display=n.style.display==='none'?'':'none';this.textContent=n.style.display==='none'?'Show '+${sorted.length-10}+' more agents ▼':'Hide middle agents ▲'">Show ${sorted.length-10} more agents ▼</div>`;
         h+=`<div style="display:none">${sorted.slice(5,-5).map(row).join('')}</div>`;
     }
     // Bottom 5
-    h+=`<div style="font-size:11px;color:#d29922;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin:10px 0 6px">▼ Needs Attention</div>`;
-    h+=sorted.slice(-5).reverse().map(row).join('');
+    if(sorted.length){
+        h+=`<div style="font-size:11px;color:#d29922;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin:10px 0 6px">▼ Needs Attention</div>`;
+        h+=sorted.slice(-5).reverse().map(row).join('');
+    }
+    // Not scored — listed separately so they are visible without being ranked.
+    if(unscored.length){
+        h+=`<div style="font-size:11px;color:#7a8a9c;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin:10px 0 6px">◌ Not Scored (${unscored.length})</div>`;
+        h+=unscored.map(row).join('');
+    }
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('aiScores').innerHTML=h;
 }
@@ -1715,6 +1795,8 @@ function showAgentDetail(name) {
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('dpTabs').innerHTML = tabs.map(t => `<div class="detail-tab${t===activeTab?' active':''}" onclick="switchDetailTab('${esc(name)}','${t.split(' ')[0]}',this)">${t}</div>`).join('');
 
+    // Opening a different agent must not inherit the previous one's open Owner editor.
+    editingOwner = false;
     renderDetailTab(name, 'Overview');
     document.getElementById('detailPanel').classList.add('open');
     document.getElementById('detailOverlay').classList.add('open');
@@ -1743,9 +1825,8 @@ function _gradeColor(grade) {
     return {A:'#3fb950', B:'#4a9eff', C:'#d29922', D:'#f0883e', F:'#f85149'}[g] || '#9aacbe';
 }
 
-// Fetch and render the latest compliance AUDIT# row into the Overview panel. Written
-// by the compliance-scanner (grade + narrative + recommendations). Shows an honest
-// empty state when no audit exists yet (scanner not yet run for this agent).
+// Render the latest compliance AUDIT# row (grade, narrative, recommendations) written by
+// the compliance-scanner, or an empty state when it has not yet graded this agent.
 async function loadAgentAudit(name) {
     const body = document.getElementById('auditPanelBody');
     if (!body) return;
@@ -1916,10 +1997,9 @@ async function runFleetAudit() {
     }, 20000);
 }
 
-// Audit EVERY registered agent: fire one fire-and-forget /compliance/scan per agent
-// (the invoker returns 202 immediately, so these run in parallel server-side), then poll
-// the fleet so grades fill in as each scanner run finishes. The scanner audits one agent
-// per invoke, so this is how the whole fleet gets covered without waiting days of rotation.
+// Audit every registered agent: one fire-and-forget /compliance/scan each (the invoker
+// returns 202, so they run in parallel server-side), then poll the fleet as grades land.
+// The scanner audits one agent per invoke, so this is how the whole fleet gets covered.
 async function auditAllAgents(btn) {
     // The compliance-scanner is gated by deployGovernanceAgents; without it the
     // /compliance/scan route does not exist.
@@ -1952,10 +2032,9 @@ async function auditAllAgents(btn) {
 }
 
 // ── AgentCore-native Evaluations view ──
-// Backed by GET /evaluations (readiness + fleet), GET /evaluations/readiness, and
-// GET /agents/{id}/evaluations. Online evaluation only scores sampled live
-// sessions, so an empty view is normal — we always explain WHY via the readiness
-// banner rather than looking broken.
+// Backed by GET /evaluations, /evaluations/readiness and /agents/{id}/evaluations. Online
+// evaluation only scores sampled live sessions, so an empty view is normal and the
+// readiness banner has to say why.
 let evalData = null;
 
 // Render a 0..1 score as a coloured percentage pill (grey em-dash when null).
@@ -1971,9 +2050,8 @@ function _evalScorePill(score) {
 async function loadEvaluations() {
     const data = await apiGetObj('/evaluations');
     evalData = data || {};
-    // Populate the per-agent picker from the real registry. The Evaluations tab can be
-    // opened before loadRegistry() has run (registryData still empty), so fetch /agents
-    // directly here as a fallback rather than depending on tab load order.
+    // Populate the per-agent picker from the registry. This tab can be opened before
+    // loadRegistry() has run, so fall back to /agents rather than rely on tab load order.
     let agents = (typeof registryData !== 'undefined' && registryData.length) ? registryData : [];
     if (!agents.length) {
         const rows = await apiGet('/agents');
@@ -1996,8 +2074,8 @@ async function loadEvaluations() {
     renderEvalFleet((evalData && Array.isArray(evalData.fleet)) ? evalData.fleet : []);
 }
 
-// Readiness banner — the honest "why is this empty" explainer. Amber/blue info
-// banner listing the backend notes[] whenever the pipeline isn't fully live.
+// Readiness banner: an amber or blue info banner listing the backend notes[] whenever the
+// pipeline is not fully live, so an empty view explains itself.
 function renderEvalReadiness(r) {
     const el = document.getElementById('evalReadiness');
     if (!el) return;
@@ -2043,9 +2121,9 @@ function renderEvalReadiness(r) {
         </div>`;
 }
 
-// Provision (or reactivate) the online-eval configs, then refresh readiness. The
-// provisioner discovers each agent's live trace log group and calls the AgentCore
-// control plane — synchronous, may take a few seconds.
+// Provision or reactivate the online-eval configs, then refresh readiness. The provisioner
+// discovers each agent's live trace log group and calls the AgentCore control plane
+// synchronously, so this can take a few seconds.
 async function enableEvaluations(btn) {
     if (btn) { btn.disabled = true; btn.textContent = 'Enabling…'; }
     const res = await apiPost('/evaluations/enable', {});
@@ -2114,8 +2192,8 @@ function renderEvalFleet(fleet) {
     }).join('');
 }
 
-// Per-agent drill: recent LLM-judged sessions with the judge's explanation text
-// and the session/trace ids for cross-referencing observability.
+// Per-agent drill: recent LLM-judged sessions with the judge's explanation and the
+// session/trace ids for cross-referencing observability.
 async function loadAgentEvaluations(agentId) {
     const box = document.getElementById('evalSessions');
     if (!box) return;
@@ -2156,14 +2234,16 @@ async function loadAgentEvaluations(agentId) {
     }).join('');
 }
 
+// Inline edit state for the detail panel's Owner row: a flag plus a re-render, not a
+// second rendering path for the row.
+let editingOwner = false;
 function renderDetailTab(name, tab) {
     const ai = aiScoresData.find(a => a.name === name), fin = finopsData.find(a => a.name === name);
     const acc = agentAccessData.find(a => a.name === name);
     const relatedAops = aopsData.filter(a => a.agents.includes(name));
     const relatedConvs = convData.filter(c => c.agentName === name);
-    // Live (discovered / manually-registered) agents are not in the seeded mock
-    // arrays. Fall back to their registry row so the Overview shows real identity
-    // fields with honest "not yet scored" gaps instead of rendering blank.
+    // Live (discovered or manually-registered) agents are not in the seeded arrays, so
+    // fall back to the registry row and show "not yet scored" gaps rather than blanks.
     const reg = (typeof registryData !== 'undefined') ? registryData.find(a => a.name === name) : null;
     // Resolve category locally (this fn is also called standalone via switchDetailTab).
     let category = '';
@@ -2174,31 +2254,34 @@ function renderDetailTab(name, tab) {
     if (tab === 'Overview') {
         // KPI row
         h += '<div class="detail-kpi-grid">';
-        if (ai) h += `<div class="detail-kpi"><div class="detail-kpi-value green">${ai.score}</div><div class="detail-kpi-label">AI Score</div></div>`;
+        // A not-scored agent shows the muted label in the KPI slot, not a number.
+        if (ai) h += raiNotScored(ai)
+            ? `<div class="detail-kpi"><div class="detail-kpi-value">${raiNotScoredHtml(ai,'15px')}</div><div class="detail-kpi-label">AI Score</div></div>`
+            : `<div class="detail-kpi"><div class="detail-kpi-value green">${ai.score}</div><div class="detail-kpi-label">AI Score</div></div>`;
         if (fin) {
             h += `<div class="detail-kpi"><div class="detail-kpi-value" style="color:#00d084">$${fin.cost}</div><div class="detail-kpi-label">Monthly Cost</div></div>`;
             h += `<div class="detail-kpi"><div class="detail-kpi-value blue">${fin.utilization}%</div><div class="detail-kpi-label">Utilization</div></div>`;
         }
         h += '</div>';
-        // Identity block — shown for any agent with no seeded RAI/cost record:
-        // discovered/registered agents (in registryData) AND external-catalog
-        // agents that exist only as a name+category. Self-contained (no dependency
-        // on renderRegistry's local badge()) so the Overview never throws/blanks.
+        // Identity block for any agent with no seeded RAI/cost record. Self-contained,
+        // with no dependency on renderRegistry's local badge(), so the Overview cannot
+        // throw or blank.
         if (!ai && !fin) {
             const r = reg || {};
             const score = Number(r.score) > 0 ? r.score : null;
             const na = '<span style="color:#9aacbe">Not yet scored</span>';
             const nodata = '<span style="color:#9aacbe">No data yet</span>';
             const status = r.status || 'discovered';
-            const sc = {active:'#3fb950','pending-review':'#d29922',pending:'#d29922',decommissioned:'#9aacbe','non-compliant':'#f85149',discovered:'#58a6ff',warning:'#d29922'}[status] || '#58a6ff';
+            // Keep in step with the registry badge map. The fallback is neutral grey: an
+            // unrecognised status must never be coloured as healthy.
+            const sc = {active:'#3fb950','pending-review':'#d29922',pending:'#d29922',inactive:'#9aacbe',rejected:'#f85149',error:'#f85149',decommissioned:'#9aacbe','non-compliant':'#f85149',discovered:'#58a6ff',warning:'#d29922'}[status] || '#9aacbe';
             h += '<div class="detail-section"><div class="detail-section-title">Agent Details</div>';
-            // "AI-inferred" marker: when the AgentCore discovery-scanner classified
-            // this agent (rather than a human), flag it so operators know the
-            // enrichment below is machine-suggested and pending human verification.
+            // "AI-inferred" marks enrichment the discovery-scanner classified rather than
+            // a human, so an operator knows it is pending verification.
             const aiTag = r.aiInferred ? ' <span style="color:#8b5cf6;font-size:11px;font-weight:600">AI-inferred</span>' : '';
             if (r.displayName && r.displayName !== r.name)
                 h += `<div class="detail-row"><span class="detail-label">Display name</span><span>${esc(r.displayName)}${aiTag}</span></div>`;
-            h += `<div class="detail-row"><span class="detail-label">Status</span><span style="color:${sc};font-weight:600">${esc(status)}</span></div>`;
+            h += `<div class="detail-row"><span class="detail-label">Status</span><span style="color:${sc};font-weight:600">${esc(statusLabel(status))}</span></div>`;
             h += `<div class="detail-row"><span class="detail-label">Category</span><span>${esc(r.category||category||'—')}${!r.category&&aiTag?'':(r.aiInferred?aiTag:'')}</span></div>`;
             if (r.riskTier) {
                 const rtc = {critical:'#f85149',high:'#f0883e',medium:'#d29922',low:'#3fb950'}[String(r.riskTier).toLowerCase()] || '#9aacbe';
@@ -2208,28 +2291,88 @@ function renderDetailTab(name, tab) {
                 h += `<div class="detail-row"><span class="detail-label">Capabilities</span><span>${esc(Array.isArray(r.capabilities)?r.capabilities.join(', '):r.capabilities)}</span></div>`;
             h += `<div class="detail-row"><span class="detail-label">Platform / System</span><span>${esc(r.platform||r.system||'—')}</span></div>`;
             h += `<div class="detail-row"><span class="detail-label">Runtime</span><span>${esc(r.runtime||'—')}</span></div>`;
-            // Suggested owner is the scanner's guess; show it only until a real owner is assigned.
-            const ownerVal = r.owner || (r.suggestedOwner ? esc(r.suggestedOwner) + ' <span style="color:#9aacbe;font-size:11px">(suggested)</span>' : 'Unassigned');
-            h += `<div class="detail-row"><span class="detail-label">Owner</span><span>${r.owner?esc(r.owner):ownerVal}</span></div>`;
+            // Owner is editable here (PATCH /agents/{id}); an agent cannot be activated
+            // without one. suggestedOwner is the scanner's guess and never counts as an
+            // owner. The controls carry no interpolated data in an onclick; wireOwnerRow()
+            // attaches their listeners after the panel's innerHTML is set.
+            const ownerNow = _realOwner(r.owner);
+            const ownerSuggested = _realOwner(r.suggestedOwner);
+            let ownerHtml;
+            if (editingOwner && r.agentId) {
+                ownerHtml = `<input id="dpOwnerInput" class="search-bar" style="margin:0;padding:6px 10px;font-size:13px;width:190px" placeholder="Team or person" value="${esc(ownerNow||ownerSuggested)}">`
+                    + `<button class="edit-btn edit-btn-save" id="dpOwnerSaveBtn" style="margin-left:6px">💾 Save</button>`
+                    + `<button class="edit-btn" id="dpOwnerCancelBtn" style="margin-left:6px">Cancel</button>`;
+            } else {
+                ownerHtml = ownerNow ? esc(ownerNow)
+                    : (ownerSuggested ? esc(ownerSuggested) + ' <span style="color:#9aacbe;font-size:11px">(suggested)</span>'
+                                      : '<span style="color:#9aacbe">Unassigned</span>');
+                if (r.agentId) ownerHtml += ` <button class="edit-btn" id="dpOwnerEditBtn" style="margin-left:8px">✏️ Edit</button>`;
+            }
+            h += `<div class="detail-row"><span class="detail-label">Owner</span><span>${ownerHtml}</span></div>`;
             h += `<div class="detail-row"><span class="detail-label">First seen</span><span>${esc(r.registered||r.lastDiscoveredAt||'—')}</span></div>`;
-            h += `<div class="detail-row"><span class="detail-label">Responsible AI</span><span>${score!=null?score:na}</span></div>`;
+            // Three distinct states: a real score, "not scored" (the scorer declined,
+            // with its reason), and "not yet scored" (it simply has not run yet).
+            const raiCell = raiNotScored(r) ? raiNotScoredHtml(r,'13px') : (score!=null?score:na);
+            h += `<div class="detail-row"><span class="detail-label">Responsible AI</span><span>${raiCell}</span></div>`;
             const cost = Number(r.monthlyCost) || 0, util = Number(r.utilization) || 0;
             h += `<div class="detail-row"><span class="detail-label">Monthly cost</span><span>${cost>0?'$'+cost.toLocaleString():nodata}</span></div>`;
             h += `<div class="detail-row"><span class="detail-label">Utilization</span><span>${util>0?util+'%':nodata}</span></div>`;
             if (Number(r.requests) > 0) h += `<div class="detail-row"><span class="detail-label">Requests</span><span>${Number(r.requests).toLocaleString()} <span style="color:#9aacbe">(${Number(r.errors)||0} errors)</span></span></div>`;
             h += '</div>';
         }
+        // Platform provenance, rendered for any agent carrying platformMetadata and
+        // skipped when it is absent. A fixed label list rather than the object's own
+        // keys: platform key names are not operator-readable, and the allowlist keeps an
+        // unexpected key out of the DOM. Keys and values both come from a platform API,
+        // so both sides of the row go through esc().
+        const pmeta = (reg && typeof reg.platformMetadata === 'object' && reg.platformMetadata) || null;
+        if (pmeta && Object.keys(pmeta).length) {
+            let pmRows = '';
+            // `accountName` is not Foundry's alone — the cross-account org connector puts
+            // an AWS account name there — so only a Foundry row may claim that label.
+            const pmFoundry = String(pmeta.source || '').indexOf('foundry') === 0;
+            [['source','Source'],['kind','Agent kind'],['model','Model'],['latestVersion','Version'],
+             ['state','Platform state'],['configurationState','Configuration state'],
+             ['subscriptionId','Azure subscription'],['accountId','AWS account ID'],
+             ['accountName', pmFoundry ? 'Foundry account' : 'Account'],['region','AWS region'],
+             // `status` and `agentStatus` are different fields, not one spelled two ways:
+             // the AgentCore passes report `status` (harness/runtime lifecycle), the
+             // Bedrock Agents Classic pass reports `agentStatus`. An agent carries one or
+             // the other, so both are labelled rather than collapsed.
+             ['status','Platform status'],['agentStatus','Agent status'],
+             ['updatedAt','Last updated on platform'],
+             ['projectName','Foundry project'],['projectKey','Project key'],
+             ['agentIdentity','Agent identity (Entra)'],['agentGuid','Agent GUID'],
+             ['blueprintId','Blueprint'],['projectEndpoint','Endpoint']].forEach(([k, label]) => {
+                const v = pmeta[k];
+                // Omit rather than render a blank row or a placeholder — a missing value
+                // is not information. Objects are skipped: they would stringify to junk.
+                if (v == null || typeof v === 'object' || String(v).trim() === '') return;
+                // agentIdentity is the Entra principal the agent authenticates as, not an
+                // accountable person. Foundry records no owner, so the Owner field above
+                // stays Unassigned; label this or it reads as the owner.
+                const hint = k === 'agentIdentity' ? ' <span style="color:#9aacbe;font-size:11px">(not an owner)</span>' : '';
+                pmRows += `<div class="detail-row"><span class="detail-label">${esc(label)}</span><span style="word-break:break-word">${esc(v)}${hint}</span></div>`;
+            });
+            // The registry key. It is the bare agent name, so it is not self-describing.
+            if (reg.agentId) pmRows += `<div class="detail-row"><span class="detail-label">Registry ID</span><span style="word-break:break-word">${esc(reg.agentId)}</span></div>`;
+            if (pmRows) h += '<div class="detail-section"><div class="detail-section-title">Platform details</div>' + pmRows + '</div>';
+        }
         // AI scores breakdown
         if (ai) {
             h += '<div class="detail-section"><div class="detail-section-title">Responsible AI Breakdown</div>';
-            [{l:'Fairness',v:ai.fairness,c:'#4a9eff'},{l:'Transparency',v:ai.transparency,c:'#8b5cf6'},{l:'Accountability',v:ai.accountability,c:'#ff8c00'},{l:'Ethics',v:ai.ethics,c:'#00d084'}].forEach(d => {
-                h += `<div class="score-bar"><span class="score-bar-label">${d.l}</span><div class="score-bar-track"><div class="score-bar-fill" style="width:${d.v}%;background:${d.c}"></div></div><span class="score-bar-value" style="color:${d.c}">${d.v}</span></div>`;
-            });
+            if (raiNotScored(ai)) {
+                // No sub-scores exist, so state why rather than drawing four empty bars.
+                h += `<div style="font-size:13px;color:#9aacbe">${raiNotScoredHtml(ai,'13px')} — ${esc(raiReason(ai))}</div>`;
+            } else {
+                [{l:'Fairness',v:ai.fairness,c:'#4a9eff'},{l:'Transparency',v:ai.transparency,c:'#8b5cf6'},{l:'Accountability',v:ai.accountability,c:'#ff8c00'},{l:'Ethics',v:ai.ethics,c:'#00d084'}].forEach(d => {
+                    h += `<div class="score-bar"><span class="score-bar-label">${d.l}</span><div class="score-bar-track"><div class="score-bar-fill" style="width:${d.v}%;background:${d.c}"></div></div><span class="score-bar-value" style="color:${d.c}">${d.v}</span></div>`;
+                });
+            }
             h += '</div>';
         }
-        // Compliance audit (real AUDIT# rows from the compliance-scanner). The panel
-        // body is filled asynchronously by loadAgentAudit() after render, since it
-        // needs a GET /agents/{id}/audit call. Includes a "Run audit" trigger button.
+        // Compliance audit (AUDIT# rows from the compliance-scanner). loadAgentAudit()
+        // fills the body after render, since it needs a GET /agents/{id}/audit call.
         h += `<div class="detail-section"><div class="detail-section-title">Compliance Audit
                 <button onclick="runComplianceAudit('${esc(name)}')" style="float:right;background:#1f6feb;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">⟳ Run audit</button></div>
               <div id="auditPanelBody"><div style="color:#9aacbe;font-size:13px">Loading latest audit…</div></div></div>`;
@@ -2301,13 +2444,44 @@ function renderDetailTab(name, tab) {
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('dpBody').innerHTML = h;
     // Overview embeds the Compliance Audit panel; fill it from the live audit API.
-    if (tab === 'Overview') loadAgentAudit(name);
+    if (tab === 'Overview') { wireOwnerRow(name); loadAgentAudit(name); }
+}
+// Listeners are attached here rather than as inline onclick attributes so no agent name
+// or owner string is interpolated into executable markup.
+function wireOwnerRow(name) {
+    const editBtn = document.getElementById('dpOwnerEditBtn');
+    if (editBtn) editBtn.addEventListener('click', () => { editingOwner = true; renderDetailTab(name, 'Overview'); });
+    const cancelBtn = document.getElementById('dpOwnerCancelBtn');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { editingOwner = false; renderDetailTab(name, 'Overview'); });
+    const saveBtn = document.getElementById('dpOwnerSaveBtn');
+    if (saveBtn) saveBtn.addEventListener('click', () => saveAgentOwner(name));
+    const input = document.getElementById('dpOwnerInput');
+    if (input) { input.addEventListener('keydown', e => { if (e.key === 'Enter') saveAgentOwner(name); }); input.focus(); }
+}
+// PATCH the owner onto the agent. Separate from the activation prompt because an owner can
+// be named at any point in the lifecycle, and the activation gate itself lives in the API.
+async function saveAgentOwner(name) {
+    const input = document.getElementById('dpOwnerInput');
+    if (!input) return;
+    // Re-read and re-normalise from the DOM rather than trusting what was rendered.
+    const owner = _realOwner(input.value);
+    if (!owner) { showToast('Type the team or person accountable, or cancel'); return; }
+    const agentId = _agentIdForName(name);
+    if (!agentId) { showToast('This agent is not in the live registry'); return; }
+    const r = await apiSend('/agents/' + _agentIdPath(agentId), 'PATCH', {owner});
+    if (!r.ok) { showToast(r.data && r.data.error ? r.data.error : 'Owner update failed'); return; }
+    editingOwner = false;
+    showToast(name + ' owner set to ' + owner);
+    // Reload first: renderDetailTab reads the registry row, so the panel can only show the
+    // new value once loadRegistry has replaced it.
+    await loadRegistry();
+    renderDetailTab(name, 'Overview');
 }
 function showComplianceModal(name) {
     const item = complianceData.find(c => c.name === name); if (!item) return;
     const color = item.status==='compliant'?'#00d084':'#ff8c00', label = item.status==='compliant'?'COMPLIANT':'NEEDS ATTENTION';
-    // esc() every interpolated field — item.name/status/lastAudit are merged from
-    // the /compliance API response (see loadFromApi), so treat them as untrusted.
+    // esc() every interpolated field: item.name/status/lastAudit are merged from the
+    // /compliance API response, so they are untrusted.
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('complianceModalContent').innerHTML = `<div class="modal-header"><h2>${esc(item.name)}</h2><span class="close" onclick="document.getElementById('complianceModal').style.display='none'">&times;</span></div><div style="text-align:center;margin-bottom:20px"><div style="font-size:48px;font-weight:bold;color:${color}">${esc(item.score)}</div><div style="background:${color};color:#000;padding:4px 12px;border-radius:12px;display:inline-block;font-size:12px;font-weight:bold">${label}</div><div style="color:#dae0e8;font-size:12px;margin-top:8px">Last audit: ${esc(item.lastAudit)}</div></div><div><h3>Control Categories</h3>${item.controls.map(c=>`<div class="control-item"><div style="display:flex;align-items:center"><div class="status-indicator ${c.s>=90?'status-compliant':'status-warning'}"></div><span>${esc(c.n)}</span></div><span style="color:${c.s>=90?'#00d084':'#ff8c00'}">${esc(c.s)}</span></div>`).join('')}</div>`;
     document.getElementById('complianceModal').style.display = 'block';
@@ -2344,7 +2518,7 @@ function populateAgentCategories(filter) {
                 const ai = aiScoresData.find(s=>s.name===a.name);
                 const fin = finopsData.find(f=>f.name===a.name);
                 return `<div class="agent-item" onclick="showAgentDetail('${esc(a.name)}')" style="margin-bottom:4px">
-                    <div class="agent-info"><div class="agent-name">${esc(a.name)}</div><div class="agent-details">${esc(a.category)}${ai?' · Score: '+ai.score:''}${fin?' · $'+fin.cost+'/mo':''}</div></div>
+                    <div class="agent-info"><div class="agent-name">${esc(a.name)}</div><div class="agent-details">${esc(a.category)}${ai?(raiNotScored(ai)?' · Not scored':' · Score: '+ai.score):''}${fin?' · $'+fin.cost+'/mo':''}</div></div>
                     <span style="color:#e2e8ee;font-size:12px">View →</span></div>`;
             }).join('');
             flatHtml += '</div>';
@@ -2366,29 +2540,37 @@ function sortFinOps(key) {
     renderFinOps();
 }
 // === AGENT REGISTRY ===
-// Live-only by default: the registry is populated from GET /agents (real discovered
-// + registered agents). No inline demo rows — an empty catalog renders the empty
-// state until discovery/registration adds real agents.
+// The registry is populated from GET /agents (discovered + registered agents). No inline
+// demo rows, so an empty catalog renders the empty state until discovery adds real ones.
 const registryData = [];
 const platformIntegrations = [
     // Real AWS connectors (the only ones doing live discovery). `platform` maps to
     // the backend CONNECTORS key so a tile can trigger its own discovery sync.
-    {name:'AWS Bedrock / Strands', icon:'AB', status:'connected', agents:0, lastSync:'—', platform:'native'},
+    {name:'AWS Bedrock Local Account', icon:'AB', status:'connected', agents:0, lastSync:'—', platform:'native'},
     {name:'AWS Organization (cross-account)', icon:'OR', status:'connected', agents:0, lastSync:'—', platform:'aws-org'},
-    {name:'Datadog', icon:'DD', status:'connected', agents:4, lastSync:'2 min ago'},
-    {name:'IBM Maximo', icon:'MX', status:'connected', agents:3, lastSync:'5 min ago'},
-    {name:'AWS IoT SiteWise', icon:'SW', status:'connected', agents:2, lastSync:'8 min ago'},
-    {name:'Zuora', icon:'ZU', status:'connected', agents:2, lastSync:'12 min ago'},
-    {name:'Snowflake', icon:'SN', status:'connected', agents:2, lastSync:'1 min ago'},
+    // `configurable` marks connectors that have a real config API (GET/PUT/DELETE
+    // /discovery/connectors), so only those get Edit/Remove buttons. loadConnectorConfigs()
+    // sets `status` from whether a config is stored: never hardcode it to 'connected', which
+    // would claim a connection nobody configured.
+    {name:'Microsoft Foundry', icon:'MF', status:'available', agents:0, lastSync:'—', platform:'microsoft', configurable:true},
+    // Roadmap tiles: agent platforms FlowAMP does not discover yet. They must stay at
+    // status 'available' with 0 agents, because no connector exists behind them and a
+    // 'connected' tile here would claim FlowAMP is governing the customer's agents on
+    // that platform. Nothing here writes a catalog row; see CONNECTORS in the discovery
+    // handler for what is real.
+    {name:'Databricks', icon:'DB', status:'available', agents:0, lastSync:'—'},
+    {name:'GCP Vertex AI', icon:'GV', status:'available', agents:0, lastSync:'—'},
+    {name:'Anthropic', icon:'AN', status:'available', agents:0, lastSync:'—'},
+    {name:'OpenAI', icon:'OA', status:'available', agents:0, lastSync:'—'},
     {name:'SAP S/4HANA', icon:'SP', status:'available', agents:0, lastSync:'—'},
     {name:'Salesforce', icon:'SF', status:'available', agents:0, lastSync:'—'},
     {name:'ServiceNow ITSM', icon:'SN', status:'available', agents:0, lastSync:'—'},
 ];
 let regFilter='all';
 let regSearch='';
-// Populate the Register-New-Agent dropdowns from real configured values so the
-// form is not free text: Source System = the connected platform integrations (+
-// the native AWS option), Owner = the business units that own the agent classes.
+// Populate the Register-New-Agent dropdowns from configured values so the form is not free
+// text: Source System = the connected integrations plus the native AWS options, Owner = the
+// business units that own the agent classes.
 function populateRegisterOptions(){
     const sysSel=document.getElementById('regSystem'), ownSel=document.getElementById('regOwner');
     if(sysSel){
@@ -2408,50 +2590,204 @@ function populateRegisterOptions(){
         if(keep&&owners.includes(keep))ownSel.value=keep;
     }
 }
+// ── Platform run state vs FlowAMP governance state ───────────────────────────
+//
+// Two questions in one column: has a human accepted responsibility for this agent (the
+// governance `status`), and is it actually running (`platformStatus`). The pair is the
+// point: an agent serving traffic while still in pending-review is the finding this
+// exists to surface.
+//
+// Every platform reports run state in its own words, so discovery normalizes them to four
+// buckets (running / stopped / failed / unknown) and keeps the platform's own string in
+// platformStatusRaw for the tooltip. See the map in the discovery handler.
+//
+// Foundry hosted agents' SESSION state is excluded. That lifecycle is Active/Idle/Resumed
+// per session with a 15-minute default idle timeout, so a value sampled on the 6-hour
+// discovery schedule would read idle for a busy agent and flap for reasons unrelated to
+// governance. Only agent-level state is reported.
+//
+// Module scope, not inside renderRegistry: the filter and the stat card both need driftOf
+// before the render helpers would be defined.
+// Display label for a governance status. The stored value is unchanged - `active` stays
+// `active` in DynamoDB, in the API, in the lifecycle state machine and in every filter and
+// count - so this is only ever for text a reader sees. Never compare against its output.
+const _STATUS_LABELS={active:'registered'};
+function statusLabel(s){ const k=String(s||''); return _STATUS_LABELS[k]||k; }
+const PLATFORM_STALE_MS=12*60*60*1000; // 2x the 6h discovery schedule
+function platformLine(a){
+    const st=String((a&&a.platformStatus)||'').trim();
+    if(!st)return '';
+    const colors={running:'#3fb950',stopped:'#9aacbe',failed:'#f85149',unknown:'#9aacbe'};
+    const raw=String((a&&a.platformStatusRaw)||'').trim();
+    const at=String((a&&a.platformStatusAt)||'').trim();
+    // A reading older than two discovery cycles is labelled stale rather than presented as
+    // current. The value still shows, dimmed, so "last seen running 3 days ago" is
+    // distinguishable from "it is running".
+    let stale=false, ago='';
+    if(at){
+        const ms=Date.now()-Date.parse(at);
+        if(!isNaN(ms)){
+            stale=ms>PLATFORM_STALE_MS;
+            const h=Math.floor(ms/3600000);
+            ago=h<1?'just now':(h<48?h+'h ago':Math.floor(h/24)+'d ago');
+        }
+    }
+    const col=stale?'#6b7d90':(colors[st]||'#9aacbe');
+    const tip=[raw?'Platform reported: '+raw:'', ago?'as of '+ago:''].filter(Boolean).join(' · ');
+    return `<div style="font-size:11px;color:${col};margin-top:3px" title="${esc(tip)}">${esc(st)}${stale?' <span style="color:#6b7d90">(stale)</span>':''}</div>`;
+}
+// The governance/platform pairs a human should look at. Returns the reason, or '' when the
+// two are consistent.
+//
+// 'unknown' is never drift. A missing or unmapped platform reading is absence of signal,
+// not evidence of a problem, so a connector that reports no run state (or a state AWS or
+// Azure adds later) degrades to silence instead of warning on every row in the fleet.
+function driftOf(a){
+    const g=String((a&&a.status)||'').trim(), p=String((a&&a.platformStatus)||'').trim();
+    if(!p||p==='unknown')return '';
+    if(p==='running'){
+        if(g==='pending-review'||g==='pending')return 'Running on its platform but not yet approved in FlowAMP';
+        if(g==='rejected')return 'Rejected in FlowAMP but still running on its platform';
+        if(g==='decommissioned')return 'Decommissioned in FlowAMP but still running on its platform';
+        if(g==='inactive')return 'Marked inactive in FlowAMP but the platform reports it running';
+    }
+    if(g==='active'&&p==='failed')return 'Approved agent is in a failed state on its platform';
+    if(g==='active'&&p==='stopped')return 'Approved agent is not running on its platform';
+    return '';
+}
 function renderRegistry(){
+    const integ=document.getElementById('regIntegrations');
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-    document.getElementById('regIntegrations').innerHTML=platformIntegrations.map(p=>{
+    integ.innerHTML=platformIntegrations.map(p=>{
         const c=p.status==='connected';
         const nm=esc(p.name);
-        // Connectors with a backend `platform` key get a Discover button that syncs
-        // just that connector (e.g. aws-org = the cross-account org discovery).
-        const discBtn=p.platform?`<button class="edit-btn" title="Discover agents from this connector" onclick="event.stopPropagation();syncDiscovery(['${p.platform}'])" style="color:#3fb950;border-color:#3fb95044">Discover</button>`:'';
-        const acts=`<div style="display:flex;gap:6px;flex-shrink:0">${discBtn}<button class="edit-btn" title="Edit connection" onclick="event.stopPropagation();editPlatform('${nm}')" style="color:#58a6ff;border-color:#58a6ff44">Edit</button><button class="edit-btn" title="Remove connection" onclick="event.stopPropagation();removePlatform('${nm}')" style="color:#f85149;border-color:#f8514944">Remove</button></div>`;
-        return `<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#243448;border:1px solid #2e4058;border-radius:8px;transition:border-color 0.15s" onmouseenter="this.style.borderColor='#3a4e66'" onmouseleave="this.style.borderColor='#2e4058'"><div style="width:32px;height:32px;border-radius:6px;background:#2e4058;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#58a6ff;flex-shrink:0;letter-spacing:-0.5px">${p.icon}</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4">${p.name}</div><div style="font-size:12px;color:#9aacbe">${c?p.agents+' agents · Synced '+p.lastSync:'Available for integration'}</div></div><span style="background:${c?'#3fb95022':'#2e4058'};color:${c?'#3fb950':'#9aacbe'};padding:3px 10px;border-radius:10px;font-size:12px;font-weight:600;flex-shrink:0">${c?'● Connected':'Connect'}</span>${acts}</div>`;
+        // Connectors with a backend `platform` key get a Discover button that syncs just
+        // that connector. Each button carries its target in data attributes, read by the
+        // delegated listener below: interpolating a name into an onclick would need
+        // escaping as JavaScript source, and esc() only escapes HTML (CodeQL js/xss).
+        const discBtn=p.platform?`<button class="edit-btn" title="Discover agents from this connector" data-conn-action="discover" data-conn-platform="${esc(p.platform)}" style="color:#3fb950;border-color:#3fb95044">Discover</button>`:'';
+        // Edit/Remove only where a real connector config API exists. On a read-only
+        // tile a Remove would DELETE a configuration that was never stored.
+        const cfgBtns=p.configurable?`<button class="edit-btn" title="Edit connection" data-conn-action="edit" data-conn-platform="${esc(p.platform||'')}" style="color:#58a6ff;border-color:#58a6ff44">Edit</button><button class="edit-btn" title="Remove connection" data-conn-action="remove" data-conn-platform="${esc(p.platform||'')}" style="color:#f85149;border-color:#f8514944">Remove</button>`:'';
+        const acts=`<div style="display:flex;gap:6px;flex-shrink:0">${discBtn}${cfgBtns}</div>`;
+        // Sub-line carries only real state: a configurable connector with no stored config
+        // says so rather than implying it is one click from working.
+        const sub=c?esc(p.agents)+' agents · Synced '+esc(p.lastSync):(p.configurable?'Not configured':'Available for integration');
+        // Sweep coverage from the connector record, shown above any error so an
+        // operator sees how much of the tenant was reached, not only whether it failed.
+        const cover=p.lastSyncSummary?`<div style="font-size:12px;color:#9aacbe">${esc(p.lastSyncSummary)}</div>`:'';
+        const err=p.lastError?`<div style="font-size:12px;color:#f85149" title="${esc(p.lastError)}">Last sync reported an error</div>`:'';
+        // Clicking the tile body opens the connector's sync metadata. Only a tile with a
+        // backend `platform` key has a connector record, so display-only tiles carry no
+        // data-conn-tile and no pointer cursor.
+        const tileAttr=p.platform?` data-conn-tile="${esc(p.platform)}" title="View last sync details"`:'';
+        return `<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#243448;border:1px solid #2e4058;border-radius:8px;transition:border-color 0.15s${p.platform?';cursor:pointer':''}"${tileAttr} onmouseenter="this.style.borderColor='#3a4e66'" onmouseleave="this.style.borderColor='#2e4058'"><div style="width:32px;height:32px;border-radius:6px;background:#2e4058;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#58a6ff;flex-shrink:0;letter-spacing:-0.5px">${esc(p.icon)}</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4">${nm}</div><div style="font-size:12px;color:#9aacbe">${sub}</div>${cover}${err}</div><span style="background:${c?'#3fb95022':'#2e4058'};color:${c?'#3fb950':'#9aacbe'};padding:3px 10px;border-radius:10px;font-size:12px;font-weight:600;flex-shrink:0">${c?'● Connected':'Connect'}</span>${acts}</div>`;
     }).join('');
+    // Delegated click handler for the integration tiles. Assigning (not adding) keeps
+    // it idempotent across the many renderRegistry() calls.
+    integ.onclick=(ev)=>{
+        const t=ev.target.closest('[data-conn-action]');
+        if(t){
+            ev.stopPropagation();
+            const plat=t.dataset.connPlatform||'';
+            if(t.dataset.connAction==='discover')syncDiscovery([plat]);
+            else if(t.dataset.connAction==='edit')editPlatform(plat);
+            else if(t.dataset.connAction==='remove')removePlatform(plat);
+            return;
+        }
+        // Tile body. Handled after the button branch, which returns: the buttons sit inside
+        // the tile, so both selectors match the same click.
+        const tile=ev.target.closest('[data-conn-tile]');
+        if(tile)showConnectorDetail(tile.dataset.connTile||'');
+    };
     let filtered=[...registryData];
     if(regFilter==='active') filtered=filtered.filter(a=>a.status==='active');
     else if(regFilter==='pending') filtered=filtered.filter(a=>a.status==='pending-review'||a.status==='pending');
     else if(regFilter==='decommissioned') filtered=filtered.filter(a=>a.status==='decommissioned');
-    else if(regFilter==='external') filtered=filtered.filter(a=>categoryAgents['External Platforms']?.includes(a.name)||a.runtime==='External API');
+    // External = an agent on a non-AWS platform. Match on CATEGORY only: the connectors
+    // that reach outside AWS write category 'External Platforms', and it is a selectable
+    // category on the Register form. Do NOT use source==='external-connector' or
+    // platform!=='native' instead, however obvious they look: the cross-account AWS
+    // Organizations connector writes that same source, and aws-org is not external, so
+    // either signal matches every org-discovered AWS agent.
+    else if(regFilter==='external') filtered=filtered.filter(a=>a.category==='External Platforms');
+    // Drift = the governance status and the platform's run state disagree. Not a status of
+    // its own, so it cannot be a status equality check like the branches above.
+    else if(regFilter==='drift') filtered=filtered.filter(a=>!!driftOf(a));
     if(regSearch){const q=regSearch.toLowerCase();filtered=filtered.filter(a=>[a.name,a.category,a.system,a.owner].some(v=>(v||'').toLowerCase().includes(q)));}
     document.getElementById('regLifecycleCount').textContent=filtered.length+' agents';
-    // Keep the nav badge + Registered metric in sync with the real catalog size
-    // (total agents, not the filtered view). These were previously hardcoded to 36.
+    // Keep the nav badge and Registered metric in sync with the catalog size (total
+    // agents, not the filtered view).
     const totalAgents=registryData.length;
     const navBadge=document.getElementById('regNavBadge'); if(navBadge)navBadge.textContent=totalAgents;
     const finCount=document.getElementById('finopsAgentCount'); if(finCount)finCount.textContent=totalAgents;
     const setTxt=(id,v)=>{const el=document.getElementById(id); if(el)el.textContent=v;};
-    // Registry stat cards (top row) — all live from registryData, were hardcoded.
-    // Registered = active; Pending Review = pending/pending-review; Decommissioned;
-    // Non-Compliant; External = count of connected platform integrations.
+    // Registry stat cards (top row), all derived from registryData. Registered = active;
+    // Pending Review = pending/pending-review; External = connected platform integrations.
     setTxt('regRegisteredMetric', registryData.filter(a=>a.status==='active').length);
     setTxt('regPending', registryData.filter(a=>a.status==='pending-review'||a.status==='pending').length);
     setTxt('regDecommissioned', registryData.filter(a=>a.status==='decommissioned').length);
     setTxt('regNonCompliant', registryData.filter(a=>a.status==='non-compliant').length);
     setTxt('regExternal', (typeof platformIntegrations!=='undefined'?platformIntegrations.filter(p=>p.status==='connected').length:0));
-    // Agent Catalog summary stats (overview tab) — were hardcoded 31 / 24 / 5.
+    // Drift count on the filter button, over the whole catalog rather than the filtered
+    // view: it is a "you have N of these" signal, so a filter must not change it. Blank at
+    // zero, because a "⚠️ Drift 0" chip reads like a problem.
+    const driftCount=registryData.filter(a=>!!driftOf(a)).length;
+    setTxt('regDriftCount', driftCount?'('+driftCount+')':'');
+    // Agent Catalog summary stats (overview tab).
     const deployedCount=registryData.filter(a=>a.status==='active').length;
     const classCount=new Set(registryData.map(a=>a.category).filter(Boolean)).size;
     setTxt('catTotalAgents',totalAgents);
     setTxt('catDeployed',deployedCount);
     setTxt('catClasses',classCount);
     setTxt('catInventoryText',`${totalAgents} agent${totalAgents===1?'':'s'} across ${classCount} class${classCount===1?'':'es'}`);
-    const badge=s=>{const m={active:['🟢','#3fb950','#3fb95022'],pending:['🟡','#d29922','#d2992222'],'pending-review':['🟡','#d29922','#d2992222'],decommissioned:['⚫','#9aacbe','#9aacbe22'],'non-compliant':['🔴','#f85149','#f8514922']};const[i,c,bg]=m[s]||m.active;return `<span style="background:${bg};color:${c};padding:3px 10px;border-radius:10px;font-size:12px;font-weight:600">${i} ${s}</span>`;};
+    // Every status the lifecycle machine can produce needs an entry in the badge map below.
+    // The fallback is a neutral grey question mark: an unrecognised status must never be
+    // painted as healthy, which is the one reading that is certainly wrong.
+    //
+    // "<id> - <label>" for the registry's Account column, platform-agnostic. Connectors all
+    // write the same two keys into platformMetadata: accountId plus an optional
+    // accountLabel. For AWS that is the account id and its name; for Microsoft Foundry it is
+    // the subscription id and name, since a subscription is the billing and isolation
+    // boundary corresponding to an AWS account (a Foundry project is finer scope and is
+    // shown on the detail page).
+    //
+    // Falls back to accountName, and shows the bare id when no label is available: the
+    // discovery scanner cannot read an AWS account name without an extra permission, and an
+    // id with no name beats inventing one. A dash when there is nothing at all.
+    const accountCell=a=>{
+        const pm=(a&&typeof a.platformMetadata==='object'&&a.platformMetadata)||{};
+        const id=(pm.accountId||'').toString().trim();
+        const label=((pm.accountLabel||pm.accountName||'')).toString().trim();
+        if(!id&&!label)return '—';
+        // Name first, then a shortened id. Only long ids are truncated: a 36-character
+        // Azure subscription GUID plus a name overflows the cell and breaks the table
+        // layout, while a 12-digit AWS account id fits whole. The full "<id> - <name>" is
+        // on the title attribute, and the untruncated values are in Platform details.
+        const shortId = id.length > 14 ? id.slice(0, 8) + '…' : id;
+        const full = [id, label].filter(Boolean).join(' - ');
+        const shown = label ? (id ? esc(label)+' · '+esc(shortId) : esc(label)) : esc(shortId);
+        return `<span title="${esc(full)}">${shown}</span>`;
+    };
+    // An unowned agent renders the muted "Unassigned" placeholder. The row itself must keep
+    // owner:'' rather than that word (see loadRegistry), so the activation gate can tell
+    // "nobody owns this" apart from an owner literally named Unassigned.
+    const ownerCell=a=>{const o=String((a&&a.owner)||'').trim();return o?esc(o):'<span style="color:#9aacbe">Unassigned</span>';};
+    // Display-only relabelling of governance statuses. The stored value stays `active`
+    // everywhere - the table, the API, the lifecycle state machine and every filter - so
+    // this must never be used for comparisons, only for what a reader sees.
+    const badge=s=>{const m={active:['🟢','#3fb950','#3fb95022'],pending:['🟡','#d29922','#d2992222'],'pending-review':['🟡','#d29922','#d2992222'],inactive:['⚪','#9aacbe','#9aacbe22'],discovered:['🔵','#58a6ff','#58a6ff22'],rejected:['🔴','#f85149','#f8514922'],warning:['🟠','#d29922','#d2992222'],error:['🔴','#f85149','#f8514922'],decommissioned:['⚫','#9aacbe','#9aacbe22'],'non-compliant':['🔴','#f85149','#f8514922']};const[i,c,bg]=m[s]||['❔','#9aacbe','#9aacbe22'];return `<span style="background:${bg};color:${c};padding:3px 10px;border-radius:10px;font-size:12px;font-weight:600">${i} ${esc(statusLabel(s))}</span>`;};
+    const statusCell=a=>{
+        const d=driftOf(a);
+        const flag=d?` <span style="cursor:help" title="${esc(d)}">⚠️</span>`:'';
+        return badge(a.status)+flag+platformLine(a);
+    };
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('regTable').innerHTML=filtered.map((a,i)=>{
         const actions=lifecycleButtons(a);
-        return `<tr style="cursor:pointer;animation:finFadeUp 0.3s ease-out ${i*0.03}s both" onclick="showAgentDetail('${esc(a.name)}')"><td style="font-weight:500">${esc(a.name)}</td><td style="color:#dee4ea">${a.category}</td><td style="color:#9aacbe">${a.system}</td><td>${badge(a.status)}</td><td style="font-size:12px;color:#9aacbe">${a.runtime}</td><td style="font-size:12px;color:#9aacbe">${a.registered}</td><td style="font-size:12px;color:#9aacbe">${a.owner}</td><td onclick="event.stopPropagation()">${actions}</td></tr>`;
+        // Every cell is esc()-encoded: category/system/runtime/owner can carry values
+        // originating outside AWS, so none of them is trusted markup.
+        return `<tr style="cursor:pointer;animation:finFadeUp 0.3s ease-out ${i*0.03}s both" onclick="showAgentDetail('${esc(a.name)}')"><td style="font-weight:500">${esc(a.name)}</td><td style="color:#dee4ea">${esc(a.category)}</td><td style="color:#9aacbe">${esc(a.system)}</td><td style="font-size:12px;color:#9aacbe;white-space:nowrap">${accountCell(a)}</td><td>${statusCell(a)}</td><td style="font-size:12px;color:#9aacbe">${esc(a.runtime)}</td><td style="font-size:12px;color:#9aacbe">${esc(a.registered)}</td><td style="font-size:12px;color:#9aacbe">${ownerCell(a)}</td><td onclick="event.stopPropagation()">${actions}</td></tr>`;
     }).join('');
     populateRegisterOptions();
 }
@@ -2460,7 +2796,7 @@ function renderRegistry(){
 // transitions the API will accept (no dead-ends, no missing paths).
 function lifecycleButtons(a){
     const id=a.agentId||'', nm=esc(a.name);
-    if(!id) return `<span style="font-size:12px;color:#9aacbe">${a.reason||'—'}</span>`;
+    if(!id) return `<span style="font-size:12px;color:#9aacbe">${esc(a.reason||'—')}</span>`;
     const btn=(state,label,color)=>`<button class="edit-btn" onclick="event.stopPropagation();lifecycleAction('${id}','${state}','${nm}')" style="color:${color};border-color:${color}44;margin-left:6px">${label}</button>`;
     const T={
         'pending-review':[['active','Approve','#3fb950'],['rejected','Reject','#f85149']],
@@ -2471,7 +2807,7 @@ function lifecycleButtons(a){
         'rejected':[],
     };
     const opts=T[a.status]||[];
-    if(!opts.length) return `<span style="font-size:12px;color:#9aacbe">${a.reason||'—'}</span>`;
+    if(!opts.length) return `<span style="font-size:12px;color:#9aacbe">${esc(a.reason||'—')}</span>`;
     return opts.map(o=>btn(o[0],o[1],o[2])).join('');
 }
 function filterRegistry(f,btn){regFilter=f;document.querySelectorAll('#regFilterBar .filter-btn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');renderRegistry();}
@@ -2484,7 +2820,10 @@ async function registerAgent(){
         category:document.getElementById('regCategory').value,
         system:document.getElementById('regSystem').value||'',
         runtime:document.getElementById('regRuntime').value,
-        owner:document.getElementById('regOwner').value||'',
+        // The dropdown's "Unassigned" entry means no owner, not an owner named
+        // "Unassigned": a placeholder would satisfy the activation gate and the
+        // `owner-populated` compliance check with nobody accountable.
+        owner:_realOwner(document.getElementById('regOwner').value),
     });
     if(r.status===409){showToast(name+' already exists');return;}
     if(!r.ok){showToast('Register failed');return;}
@@ -2493,94 +2832,377 @@ async function registerAgent(){
     showToast(name+' submitted for review');
     await loadRegistry();
 }
-// Drive a lifecycle transition (approve -> active, decommission -> decommissioned)
-// through the real route, then resync from the server. No optimistic row flip:
-// loadRegistry() re-renders from the authoritative response.
+// Discovered agent IDs can contain colons (e.g. native:bedrock-agent:XXXX).
+// encodeURIComponent turns ':' into %3A, which API Gateway path-matching rejects with a 404;
+// colons are valid raw path characters, so preserve them.
+function _agentIdPath(agentId){ return encodeURIComponent(agentId).replace(/%3A/g,':'); }
+// A displayed placeholder is not an owner. Normalises whatever the operator picked or typed
+// to either a real name or ''.
+function _realOwner(v){ const o=String(v||'').trim(); return o.toLowerCase()==='unassigned'?'':o; }
+
+// Drive a lifecycle transition through the real route, then resync from the server. No
+// optimistic row flip: loadRegistry() re-renders from the authoritative response.
 async function lifecycleAction(agentId, newState, name){
     if(!agentId){showToast('No agentId on this row');return;}
-    // Discovered agent IDs contain colons (e.g. native:bedrock-agent:XXXX).
-    // encodeURIComponent turns ':' into %3A, which API Gateway path-matching
-    // rejects with a 404; colons are valid raw path chars, so preserve them.
-    const idPath=encodeURIComponent(agentId).replace(/%3A/g,':');
-    const r=await apiSend('/agents/'+idPath+'/lifecycle','POST',{newState});
+    // An agent cannot be activated without a named owner, so collect one and send it with
+    // the transition. This prompt is not the guard: data-handler's update_lifecycle enforces
+    // the same rule with a 422, and that server check must not be removed because this one
+    // exists.
+    if(newState==='active'){
+        const row=(typeof registryData!=='undefined')?registryData.find(a=>a.agentId===agentId):null;
+        if(!_realOwner(row&&row.owner)){
+            // suggestedOwner is the scanner's guess, not an owner: it only prefills the
+            // field, and the operator has to accept it explicitly.
+            openOwnerPrompt(agentId,name,_realOwner(row&&row.suggestedOwner));
+            return;
+        }
+    }
+    await sendLifecycle(agentId,newState,name,'');
+}
+// The single place the lifecycle route is called, so every transition gets the same
+// error handling whether or not it collected an owner on the way in.
+async function sendLifecycle(agentId, newState, name, owner){
+    const body={newState};
+    if(owner)body.owner=owner;
+    const r=await apiSend('/agents/'+_agentIdPath(agentId)+'/lifecycle','POST',body);
     if(r.status===409){showToast(r.data&&r.data.error?r.data.error:'Transition not allowed');await loadRegistry();return;}
+    // 422 is the owner gate. It can still arrive despite the prompt above (a stale row, or
+    // another tab clearing the owner), so show the server's own message rather than a
+    // generic failure, and resync the row.
+    if(r.status===422){showToast(r.data&&r.data.error?r.data.error:'An owner is required before an agent can be activated.');await loadRegistry();return;}
     if(!r.ok){showToast('Update failed');return;}
     const verb={active:'activated','pending-review':'restored to review',inactive:'deactivated',decommissioned:'decommissioned',rejected:'rejected'}[newState]||newState;
     showToast(name+' '+verb);
     await loadRegistry();
 }
-async function connectPlatform(){
-    const name=document.getElementById('connectName').value.trim();
-    if(!name){alert('Platform name is required');return;}
-    const url=document.getElementById('connectUrl').value||'https://api.'+name.toLowerCase().replace(/\s+/g,'')+'.com/v1';
-    const auth=document.getElementById('connectAuth').value;
-    const agents=parseInt(document.getElementById('connectAgents').value)||1;
-    const status=document.getElementById('connectStatus');
-    const btn=document.getElementById('connectBtn');
-    btn.disabled=true;btn.textContent='Connecting...';btn.style.opacity='0.6';
-    status.style.display='block';
-    const steps=['Resolving endpoint...','Authenticating via '+esc(auth)+'...','Registering in AgentCore gateway...','Syncing agent metadata...','Verifying connection...'];
-    for(let i=0;i<steps.length;i++){
-        status.style.background='#223044';status.style.borderLeft='3px solid #58a6ff';status.style.color='#58a6ff';
-        // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-        status.innerHTML='<div style="display:flex;align-items:center;gap:8px"><div style="width:14px;height:14px;border:2px solid #58a6ff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite"></div>'+steps[i]+'</div>';
-        await new Promise(r=>setTimeout(r,800+Math.random()*400));
-    }
-    const existing=platformIntegrations.find(p=>p.name===editingPlatform||p.name===name);
-    if(existing){
-        // Edit in place — update the existing connection rather than adding one.
-        existing.name=name;existing.agents=agents;existing.status='connected';existing.lastSync='Just now';
-    }else{
-        const abbr=name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-        platformIntegrations.unshift({name,icon:abbr,status:'connected',agents,lastSync:'Just now'});
-        // Also add a registry entry for a newly-connected platform.
-        registryData.push({name:name+' Agent',category:'External Platforms',system:name,status:'active',runtime:'External API',registered:new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),owner:'Platform Team'});
-    }
-    const verb=existing?'Updated':'Connected to';
-    status.style.background='#1a3a2a';status.style.borderLeft='3px solid #3fb950';status.style.color='#3fb950';
-    // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-    status.innerHTML='✓ '+verb+' '+esc(name)+' · '+esc(agents)+' agent(s)';
-    btn.textContent=existing?'Saved':'Connected';btn.style.background='#3fb950';
-    renderRegistry();
-    const wasEditing=existing;editingPlatform=null;
-    setTimeout(()=>{document.getElementById('connectModal').style.display='none';btn.disabled=false;btn.textContent='Connect Platform';btn.style.opacity='1';btn.style.background='#238636';status.style.display='none';document.getElementById('connectName').value='';document.getElementById('connectUrl').value='';showToast(name+(wasEditing?' updated':' connected successfully'));},2000);
+// The activation waiting on an owner, set by lifecycleAction and consumed by
+// confirmOwnerActivation.
+let pendingActivation=null;
+function openOwnerPrompt(agentId, name, suggested){
+    pendingActivation={agentId,name};
+    const input=document.getElementById('ownerPromptInput');
+    // textContent / .value, never innerHTML: the agent name and the scanner's suggestion
+    // both originate outside this page, and neither becomes markup on this path.
+    document.getElementById('ownerPromptAgent').textContent=name+' cannot be activated until someone owns it.';
+    const hint=document.getElementById('ownerPromptHint');
+    hint.textContent=suggested
+        ? 'Discovery suggested "'+suggested+'". A suggestion is not an owner: edit or confirm it to accept responsibility.'
+        : 'Required before activation. Activation is where a human takes responsibility for the agent, so discovery never fills this in for you.';
+    input.value=suggested||'';
+    document.getElementById('ownerModal').style.display='block';
+    input.focus(); input.select();
 }
-let editingPlatform=null;
-// Open the modal for a NEW connection (clears any edit state + resets labels).
-function openConnectPlatform(){
-    editingPlatform=null;
-    ['connectName','connectUrl'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-    const ag=document.getElementById('connectAgents');if(ag)ag.value=1;
-    const st=document.getElementById('connectStatus');if(st)st.style.display='none';
-    const hdr=document.querySelector('#connectModal .modal-header h2');if(hdr)hdr.textContent='Connect Platform';
-    const btn=document.getElementById('connectBtn');if(btn){btn.textContent='Connect Platform';btn.style.background='#238636';btn.disabled=false;btn.style.opacity='1';}
-    document.getElementById('connectModal').style.display='block';
+function closeOwnerPrompt(){
+    pendingActivation=null;
+    document.getElementById('ownerModal').style.display='none';
 }
-// Open the Connect Platform modal prefilled to edit an existing integration.
-function editPlatform(name){
-    const p=platformIntegrations.find(x=>x.name===name);
+// Cancel, or a whitespace-only entry, sends nothing: defaulting the owner is exactly what
+// the rule forbids.
+async function confirmOwnerActivation(){
+    const p=pendingActivation;
     if(!p)return;
-    editingPlatform=name;
-    document.getElementById('connectName').value=p.name;
-    document.getElementById('connectUrl').value='';
-    document.getElementById('connectAgents').value=p.agents||1;
-    const st=document.getElementById('connectStatus');if(st){st.style.display='none';}
-    const hdr=document.querySelector('#connectModal .modal-header h2');if(hdr)hdr.textContent='Edit Connection';
-    const btn=document.getElementById('connectBtn');if(btn)btn.textContent='Save Changes';
+    const owner=_realOwner(document.getElementById('ownerPromptInput').value);
+    if(!owner){showToast('Type the team or person accountable for this agent');return;}
+    closeOwnerPrompt();
+    await sendLifecycle(p.agentId,'active',p.name,owner);
+}
+// === PLATFORM CONNECTORS (real config API) ===
+// Stored connector configs from GET /discovery/connectors, keyed by platform. The client
+// secret is never returned by the API; `credentialSet` reports whether one is stored, which
+// is what lets an edit omit the secret and keep the existing one.
+let connectorConfigs={};
+// The connector the modal is currently editing. Only connectors with a config API
+// are editable, so this is always set from the tile that opened the modal.
+let editingPlatform=null;
+
+// Human label for a platform key. Reuses the discovery name map so a tile, a toast
+// and the modal title can never disagree about what a connector is called.
+function connectorLabel(plat){ return DISCOVERY_PLATFORM_NAMES[plat] || plat || 'Platform'; }
+
+// Load the stored connector configs and fold them into the integration tiles. Connected
+// status comes from whether a config exists and is enabled, so a tile never claims a
+// connection nobody configured.
+async function loadConnectorConfigs(){
+    const data=await apiGetObj('/discovery/connectors');
+    const list=(data&&Array.isArray(data.connectors))?data.connectors:[];
+    connectorConfigs={};
+    list.forEach(c=>{ if(c&&c.platform)connectorConfigs[c.platform]=c; });
+    platformIntegrations.forEach(p=>{
+        if(!p.configurable)return;
+        const c=connectorConfigs[p.platform];
+        p.status=(c&&c.enabled!==false)?'connected':'available';
+        // lastSyncAt/lastError come straight off the connector record; '—' when the connector
+        // has never run, rather than an invented "just now".
+        p.lastSync=(c&&c.lastSyncAt)?new Date(c.lastSyncAt).toLocaleString():'—';
+        p.lastError=(c&&c.lastSyncStatus==='error')?(c.lastError||'Sync failed'):'';
+        // Coverage, not just health: a tenant sweep can finish without error and still skip
+        // projects the service principal cannot read, which lastSyncStatus alone hides.
+        p.lastSyncSummary=(c&&c.lastSyncSummary)?c.lastSyncSummary:'';
+    });
+    renderRegistry();
+}
+
+// === CONNECTOR SYNC DETAIL ===
+// Words that must not be sentence-cased when a details key becomes a label. Everything else
+// is lowercased after the first word, so `managementAccountId` reads "Management account ID".
+const _CONN_INITIALISMS={id:'ID',ids:'IDs',arn:'ARN',arns:'ARNs',aws:'AWS',url:'URL',urls:'URLs',api:'API',apis:'APIs',ou:'OU',ous:'OUs',iam:'IAM',sso:'SSO',pii:'PII'};
+// The details map is open-ended (keys vary per connector and are added server-side), so
+// labels are derived rather than enumerated: a new key must appear with no change here.
+function _connLabel(key){
+    const words=String(key||'')
+        .replace(/([a-z0-9])([A-Z])/g,'$1 $2')       // tenantId -> tenant Id
+        .replace(/([A-Z]+)([A-Z][a-z])/g,'$1 $2')    // AWSAccount -> AWS Account
+        .replace(/[_-]+/g,' ')
+        .trim().split(/\s+/).filter(Boolean);
+    if(!words.length)return String(key||'');
+    const norm=(w,lower)=>_CONN_INITIALISMS[w.toLowerCase()]||(/^[A-Z0-9]+$/.test(w)?w:(lower?w.toLowerCase():w.charAt(0).toUpperCase()+w.slice(1)));
+    return [norm(words[0],false)].concat(words.slice(1).map(w=>norm(w,true))).join(' ');
+}
+// How many array entries a details row shows before collapsing the tail behind "+N more".
+// An unreadable-projects list can be long enough to bury everything below it.
+const _CONN_ARRAY_PREVIEW=5;
+let _connMoreSeq=0;
+// Render the connector's `details` map generically. Both the keys and the values come
+// from an external platform (Azure ARM, AWS Organizations), so every one of them goes
+// through esc() before reaching the innerHTML sink (CodeQL js/xss).
+function _connDetailRows(details){
+    if(!details||typeof details!=='object'||Array.isArray(details))return '';
+    let rows='';
+    Object.keys(details).forEach(k=>{
+        const v=details[k];
+        let val;
+        if(Array.isArray(v)){
+            const items=v.filter(x=>x!=null&&String(x).trim()!=='').map(x=>String(x));
+            if(!items.length)return;
+            val=items.slice(0,_CONN_ARRAY_PREVIEW).map(esc).join(', ');
+            if(items.length>_CONN_ARRAY_PREVIEW){
+                // The tail is rendered up front but hidden, so the expander needs no stored
+                // state and no interpolated data in an onclick: the trigger carries only the
+                // generated id of its own tail span.
+                const id='connMore'+(++_connMoreSeq);
+                val+=`<span id="${id}" style="display:none">, ${items.slice(_CONN_ARRAY_PREVIEW).map(esc).join(', ')}</span>`
+                   +` <span data-conn-more="${id}" style="color:#58a6ff;cursor:pointer">+${items.length-_CONN_ARRAY_PREVIEW} more</span>`;
+            }
+        }else if(typeof v==='object'){
+            // The contract is a flat map. A nested object would stringify to
+            // "[object Object]", which is worse than omitting the key.
+            return;
+        }else if(typeof v==='number'){
+            // A real 0 is coverage information ("0 accounts skipped"), so it renders —
+            // unlike an empty string, which is just an absent field.
+            if(!Number.isFinite(v))return;
+            val=esc(v);
+        }else{
+            if(String(v).trim()==='')return;
+            val=esc(v);
+        }
+        rows+=`<div class="detail-row"><span class="detail-label">${esc(_connLabel(k))}</span><span style="word-break:break-word;text-align:right;margin-left:12px">${val}</span></div>`;
+    });
+    return rows;
+}
+// lastSyncStatus -> colour, using the same palette as the registry status badges.
+const _CONN_SYNC_COLORS={ok:'#3fb950',partial:'#d29922',error:'#f85149',skipped:'#9aacbe'};
+// Open the shared slide-over on one connector's last sync, so an operator can see what the
+// connector saw (org ID, accounts scanned, Foundry projects swept) and not only whether it
+// errored. Reuses #detailPanel because its Escape handler, overlay close and .detail-*
+// styling already exist.
+function showConnectorDetail(plat){
+    if(!plat)return;
+    // State is read from connectorConfigs (the GET /discovery/connectors response) —
+    // platformIntegrations only carries the handful of fields the tile paints.
+    const rec=connectorConfigs[plat];
+    const c=rec||{};
+    const tile=platformIntegrations.find(p=>p.platform===plat)||{};
+    document.getElementById('dpTitle').textContent=c.name||tile.name||connectorLabel(plat);
+    document.getElementById('dpSubtitle').textContent='Connector · '+plat;
+    // dpTabs must be overwritten or the panel keeps whichever agent's tabs were
+    // rendered last. A connector has exactly one view, hence cursor:default — the
+    // .detail-tab class is styled clickable and this tab switches nothing.
+    // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
+    document.getElementById('dpTabs').innerHTML='<div class="detail-tab active" style="cursor:default">Last Sync</div>';
+    const st=String(c.lastSyncStatus||'');
+    const col=_CONN_SYNC_COLORS[st]||'#9aacbe';
+    const pill=`<span style="background:${col}22;color:${col};padding:3px 10px;border-radius:10px;font-size:12px;font-weight:600">${esc(st||'no sync recorded')}</span>`;
+    // Timestamps arrive as UTC ISO strings and are shown in the operator's timezone, as the
+    // tile's "Synced ..." line does. An unparseable value reads as never-synced, not
+    // "Invalid Date".
+    const d=c.lastSyncAt?new Date(c.lastSyncAt):null;
+    const when=(d&&!isNaN(d.getTime()))?d.toLocaleString():'';
+    let h='<div class="detail-section"><div class="detail-section-title">Last Sync</div>';
+    h+=`<div class="detail-row"><span class="detail-label">Status</span><span>${pill}</span></div>`;
+    h+=`<div class="detail-row"><span class="detail-label">Platform key</span><span>${esc(plat)}</span></div>`;
+    h+=`<div class="detail-row"><span class="detail-label">Last sync</span><span>${esc(when||'Never')}</span></div>`;
+    if(c.lastSyncSummary)h+=`<div class="detail-row"><span class="detail-label">Coverage</span><span style="word-break:break-word;text-align:right;margin-left:12px">${esc(c.lastSyncSummary)}</span></div>`;
+    h+='</div>';
+    if(c.lastError)h+=`<div class="detail-section"><div class="detail-section-title">Error</div><div style="font-size:13px;color:#f85149;word-break:break-word">${esc(c.lastError)}</div></div>`;
+    const rows=_connDetailRows(c.details);
+    if(rows)h+='<div class="detail-section"><div class="detail-section-title">Sync Details</div>'+rows+'</div>';
+    // Two different absences, said differently: no connector record at all vs a record
+    // whose last sync reported no coverage fields. Neither invents a placeholder row.
+    else h+=`<div class="detail-section"><div style="font-size:13px;color:#9aacbe">${rec?'The last sync reported no details for this connector.':'No sync data recorded for this connector yet.'}</div></div>`;
+    const body=document.getElementById('dpBody');
+    // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
+    body.innerHTML=h;
+    // Delegated expander for the truncated arrays. Assigned rather than added so it stays
+    // idempotent across repeated opens, and scoped to [data-conn-more] so it is inert when
+    // the agent detail panel reuses this element.
+    body.onclick=(ev)=>{
+        const t=ev.target.closest('[data-conn-more]');
+        if(!t)return;
+        const rest=document.getElementById(t.dataset.connMore);
+        if(rest)rest.style.display='inline';
+        t.style.display='none';
+    };
+    document.getElementById('detailPanel').classList.add('open');
+    document.getElementById('detailOverlay').classList.add('open');
+}
+
+// Paint the modal status line. Three states only: request in flight, the API said ok, or
+// the API returned this error.
+function setConnectStatus(kind, html){
+    const st=document.getElementById('connectStatus');
+    if(!st)return;
+    if(!kind){st.style.display='none';st.textContent='';return;}
+    const c={info:['#223044','#58a6ff'],ok:['#1a3a2a','#3fb950'],error:['#3a1a1a','#f85149']}[kind]||['#223044','#58a6ff'];
+    st.style.display='block';st.style.background=c[0];st.style.borderLeft='3px solid '+c[1];st.style.color=c[1];
+    // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
+    st.innerHTML=html;
+}
+// Read a modal field. Values read back out of the DOM are re-escaped at every render
+// site — reading from the DOM launders any earlier escaping.
+function _connectVal(id){ const el=document.getElementById(id); return el?el.value.trim():''; }
+
+// PUT the form to /discovery/connectors/{platform}, report what the API said, then refresh
+// the tiles and registry from the server. No local mutation of platformIntegrations and no
+// synthesised registry row: the discovery pass supplies the agents, or nothing appears.
+async function connectPlatform(){
+    const plat=editingPlatform||'microsoft';
+    const label=connectorLabel(plat);
+    const stored=connectorConfigs[plat];
+    const body={
+        tenantId:_connectVal('connectTenantId'),
+        clientId:_connectVal('connectClientId'),
+        enabled:!!(document.getElementById('connectEnabled')||{}).checked,
+    };
+    const secret=_connectVal('connectClientSecret');
+    // Omitting clientSecret tells the API to keep the credential it already holds,
+    // which is the only way to toggle a connector without retyping the secret.
+    if(secret)body.clientSecret=secret;
+    const missing=[];
+    if(!body.tenantId)missing.push('Tenant ID');
+    if(!body.clientId)missing.push('Client ID');
+    if(!secret&&!(stored&&stored.credentialSet))missing.push('Client Secret');
+    if(missing.length){setConnectStatus('error','Required: '+esc(missing.join(', ')));return;}
+    const btn=document.getElementById('connectBtn');
+    const original=btn?btn.textContent:'';
+    if(btn){btn.disabled=true;btn.style.opacity='0.6';btn.textContent='Saving...';}
+    setConnectStatus('info','Saving connector configuration...');
+    const r=await apiSend('/discovery/connectors/'+encodeURIComponent(plat),'PUT',body);
+    if(btn){btn.disabled=false;btn.style.opacity='1';btn.textContent=original||'Connect Platform';}
+    if(!r.ok){
+        const msg=(r.data&&r.data.error)?r.data.error:('Save failed'+(r.status?' (HTTP '+r.status+')':''));
+        setConnectStatus('error','✕ '+esc(msg));
+        return;
+    }
+    setConnectStatus('ok','✓ Saved. Use Test connection to verify it, or Discover to sync agents.');
+    await loadConnectorConfigs();
+    await loadDiscoveryStatus();
+    await loadRegistry();
+    showToast(label+' connector saved');
+}
+
+// POST /discovery/connectors/{platform}/test. The route validates the SAVED config
+// (it accepts no body), so an unsaved form cannot be tested — hence the explicit
+// "save first" message instead of silently testing stale credentials.
+async function testPlatformConnection(){
+    const plat=editingPlatform||'microsoft';
+    // Gate on a credential actually being stored, not on the config entry merely existing.
+    // Every connector has a placeholder entry from the moment the platform row is created, so
+    // testing presence let an unsaved form through to the API, which answered "Connector is not
+    // configured" - a backend error where the real problem was that Save had not been pressed.
+    if(!(connectorConfigs[plat]&&connectorConfigs[plat].credentialSet)){setConnectStatus('error','Save the configuration first - the test runs against the stored connector, not the form.');return;}
+    const btn=document.getElementById('connectTestBtn');
+    const original=btn?btn.textContent:'';
+    if(btn){btn.disabled=true;btn.style.opacity='0.6';btn.textContent='Testing...';}
+    setConnectStatus('info','Sweeping the tenant for Foundry projects...');
+    const r=await apiSend('/discovery/connectors/'+encodeURIComponent(plat)+'/test','POST',null);
+    if(btn){btn.disabled=false;btn.style.opacity='1';btn.textContent=original||'Test connection';}
+    const d=r.data||{};
+    if(!r.ok||!d.ok){
+        const msg=d.error||('Test failed'+(r.status?' (HTTP '+r.status+')':''));
+        setConnectStatus('error','✕ '+esc(msg));
+        return;
+    }
+    // The test reports the breadth of the tenant sweep, not one project's inventory. Only
+    // counts the API returned are shown: an absent field means the sweep did not report
+    // that layer, which is not the same claim as a zero.
+    const parts=[];
+    [['subscriptions','subscription'],['accounts','account'],['projects','project'],['agentCount','agent']].forEach(pair=>{
+        const v=Number(d[pair[0]]);
+        if(d[pair[0]]==null||!Number.isFinite(v))return;
+        parts.push(v+' '+pair[1]+(v===1?'':'s'));
+    });
+    const head='✓ Connected'+(parts.length?' · '+esc(parts.join(', ')):'');
+    // Project keys come from Azure, so they are esc()-encoded like any other server
+    // value before reaching the innerHTML sink in setConnectStatus().
+    const denied=Array.isArray(d.denied)?d.denied.filter(x=>x!=null&&x!==''):[];
+    if(denied.length){
+        // A sweep the service principal could not complete is a partial result: the counts
+        // above are a floor, not the tenant's fleet. Rendered 'info' (blue) rather than
+        // 'ok' (green) so it never reads as a clean success.
+        setConnectStatus('info',head+'<div style="margin-top:6px">⚠ '+denied.length+' project'+(denied.length===1?'':'s')+' denied: '+esc(denied.join(', '))+'</div>');
+        return;
+    }
+    setConnectStatus('ok',head);
+}
+
+// "+ Connect New Platform" opens the one connector that has a real config API. There is no
+// free-text "add any platform" path: a connector needs backend support (credentials, an
+// enumerate call, a mapping to registry rows) to exist.
+function openConnectPlatform(){
+    const first=platformIntegrations.find(p=>p.configurable);
+    editPlatform(first?first.platform:'microsoft');
+}
+// Open the modal prefilled from the stored config. The secret box stays empty by
+// design — the API never returns it — with a hint saying blank keeps the stored one.
+function editPlatform(plat){
+    const p=platformIntegrations.find(x=>x.platform===plat&&x.configurable);
+    if(!p){showToast(connectorLabel(plat)+' has no editable configuration');return;}
+    editingPlatform=plat;
+    const c=connectorConfigs[plat]||{};
+    const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};
+    set('connectTenantId',c.tenantId);
+    set('connectClientId',c.clientId);
+    set('connectClientSecret','');
+    const en=document.getElementById('connectEnabled');if(en)en.checked=c.enabled!==false;
+    const hint=document.getElementById('connectSecretHint');
+    if(hint)hint.textContent=c.credentialSet
+        ? 'A secret is already stored. Leave this blank to keep the existing credential.'
+        : 'Stored encrypted server-side and never returned to this page.';
+    setConnectStatus(null);
+    const hdr=document.getElementById('connectTitle');
+    if(hdr)hdr.textContent=(connectorConfigs[plat]?'Edit ':'Connect ')+connectorLabel(plat);
+    const btn=document.getElementById('connectBtn');
+    if(btn){btn.textContent=connectorConfigs[plat]?'Save Changes':'Connect Platform';btn.style.background='#238636';btn.disabled=false;btn.style.opacity='1';}
+    const tbtn=document.getElementById('connectTestBtn');
+    if(tbtn){tbtn.textContent='Test connection';tbtn.disabled=false;tbtn.style.opacity='1';}
     document.getElementById('connectModal').style.display='block';
 }
-// Remove a platform integration (client-side; the connector config is demo data).
-function removePlatform(name){
-    if(!confirm('Remove the connection to '+name+'? Discovered agents already in the catalog are not deleted.'))return;
-    const i=platformIntegrations.findIndex(x=>x.name===name);
-    if(i>=0)platformIntegrations.splice(i,1);
-    renderRegistry();
-    showToast(name+' connection removed');
+// DELETE the stored connector config, then refresh from the server. Agents already
+// discovered stay in the catalog: removing a connector is not a retroactive delete.
+async function removePlatform(plat){
+    const label=connectorLabel(plat);
+    if(!connectorConfigs[plat]){showToast(label+' has no stored configuration');return;}
+    if(!confirm('Remove the '+label+' connector configuration? Agents already in the catalog are not deleted.'))return;
+    const r=await apiSend('/discovery/connectors/'+encodeURIComponent(plat),'DELETE',null);
+    if(!r.ok){showToast('Remove failed'+(r.status?' (HTTP '+r.status+')':''));return;}
+    await loadConnectorConfigs();
+    await loadRegistry();
+    showToast(label+' connector removed');
 }
 function renderFinOps() {
-    // Source badge + real-total: when the live COST# ledger has cost-explorer rows,
-    // the total spend KPI reflects REAL AWS spend (sum of totalCost) rather than the
-    // inline synthetic finopsData. demo-seed rows are labelled as illustrative.
+    // Source badge and total: with cost-explorer rows in the live COST# ledger the total
+    // spend KPI is real AWS spend (sum of totalCost); demo-seed rows are labelled as such.
     const liveTotal=liveCostRows.reduce((s,r)=>s+Number(r.totalCost||0),0);
     const hasCE=liveCostRows.some(r=>r.source==='cost-explorer');
     const hasSeed=liveCostRows.some(r=>r.source==='demo-seed');
@@ -2590,10 +3212,9 @@ function renderFinOps() {
         else if(hasSeed){badge.style.display='';badge.textContent='◐ Demo data';badge.style.background='#d2992222';badge.style.color='#d29922';}
         else{badge.style.display='none';}
     }
-    // Cost-by-component breakdown: aggregate costByComponent across live COST# rows
-    // (real per-service attribution from the collector). Only shown when live rows
-    // exist; modelInference stays null until token cost is collected, so it renders
-    // as "not tracked" rather than a fake number.
+    // Cost-by-component breakdown: aggregate costByComponent across live COST# rows, shown
+    // only when those rows exist. modelInference stays null until token cost is collected,
+    // so it renders as "not tracked" rather than a fake number.
     const compSection=document.getElementById('finComponentSection');
     const compParts={modelInference:0,agentCompute:0,toolExecution:0,storage:0};
     let compHasData=false, modelTracked=false;
@@ -2616,11 +3237,9 @@ function renderFinOps() {
             }).join('');
         } else { compSection.style.display='none'; }
     }
-    // Prefer the real ledger total when Cost Explorer data is present; else fall back
-    // to the inline finopsData sum so the demo still shows numbers.
-    // Live-only: total is the real Cost Explorer sum. finopsData is empty by default
-    // (no synthetic fallback), so guard the averages against divide-by-zero — they
-    // read '—'/0 until real cost data + metrics exist.
+    // Total is the Cost Explorer sum when present, else the finopsData sum. finopsData is
+    // empty by default, so the averages must guard against divide-by-zero; they read '—' or
+    // 0 until real cost data and metrics exist.
     const total=hasCE?Math.round(liveTotal):(finopsData.length?Math.round(finopsData.reduce((s,a)=>s+a.cost,0)):0);
     const avgCPI=finopsData.length?(finopsData.reduce((s,a)=>s+a.costPerInvocation,0)/finopsData.length*1000):0;
     const avgUtil=finopsData.length?Math.round(finopsData.reduce((s,a)=>s+a.utilization,0)/finopsData.length):0;
@@ -2696,12 +3315,12 @@ function renderFinOps() {
     donutSvg.innerHTML=donutPaths;
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('finDonutLegend').innerHTML=legendHtml;
-    // Category comes from a data attribute read back via dataset, not from an inline
-    // onclick built by string interpolation. Interpolating a value into an onclick means
-    // hand-escaping it as JavaScript source, and the previous `replace(/'/g, "\\'")` did
-    // not escape backslashes — so a category containing one could terminate the string
-    // literal and inject code (CodeQL js/incomplete-sanitization). A data attribute is
-    // HTML-escaped by esc() and is never parsed as JavaScript.
+    // Category comes from a data attribute read back via dataset, never from an inline
+    // onclick built by string interpolation. Interpolating into an onclick means
+    // hand-escaping the value as JavaScript source, which is how a category containing a
+    // backslash terminates the string literal and injects code (CodeQL
+    // js/incomplete-sanitization). A data attribute is HTML-escaped by esc() and is never
+    // parsed as JavaScript.
     for (const el of [donutSvg, document.getElementById('finDonutLegend')]) {
         if (!el) continue;
         el.onclick = (ev) => {
@@ -2718,9 +3337,8 @@ function renderFinOps() {
     }).join('')}<tr style="font-weight:700;border-top:2px solid #3a4e66"><td>Total</td><td>${finopsData.length}</td><td style="font-family:monospace">$${total.toLocaleString()}</td><td>100%</td><td></td></tr></tbody></table>`;
     // Anomalies
     const anomalies=[];
-    // Live ledger anomaly: a day whose total exceeds 1.25x the trailing 7-day
-    // average. Derived from the live COST# rows (pts), layered on top of the
-    // finopsData-based anomalies below as the baseline.
+    // Live ledger anomaly: a day whose total exceeds 1.25x the trailing 7-day average,
+    // derived from the live COST# rows (pts) and layered on the finopsData anomalies below.
     if(liveDates.length>=2){
         const last=pts[pts.length-1];
         const prior=pts.slice(Math.max(0,pts.length-8),pts.length-1);
@@ -2973,22 +3591,21 @@ function animateMetrics() {
         const t=setInterval(()=>{cur+=inc;if(cur>=m.value){cur=m.value;clearInterval(t);}el.textContent=(m.prefix||'')+cur.toFixed(m.value<10?1:0)+(m.suffix||'');},20);
     });
 }
-// Base URL for the REST API. Derived from the deploy-injected window.CHAT_API_URL
-// (config.js sets it to "<api>/chat") by stripping the trailing /chat. Falls back
-// to same-origin "" when unset (e.g. opened as a local file), in which case the
-// fetches below fail quietly and the UI renders from its inline seed constants.
+// Base URL for the REST API, derived from the deploy-injected window.CHAT_API_URL
+// ("<api>/chat") by stripping the trailing /chat. Falls back to same-origin "" when unset,
+// in which case the fetches below fail quietly and the UI renders from its seed constants.
 function getApiBase() {
     const u = window.CHAT_API_URL || '';
     return u.replace(/\/chat\/?$/, '');
 }
 
-// Fetch one read route through the Cognito auth header. Returns [] on any failure
-// so a cold/unauthenticated API never blanks the UI — inline constants stand in.
+// Fetch one read route through the Cognito auth header. Returns [] on any failure so a cold
+// or unauthenticated API never blanks the UI; the inline constants stand in.
 async function apiGet(path) {
     try {
         const res = await fetch(getApiBase() + path, { headers: authHeaders() });
-        // An expired/absent Cognito token surfaces as 401/403. Prompt re-login (same
-        // as apiSend) instead of silently returning [] and leaving the view blank.
+        // An expired or absent Cognito token surfaces as 401/403. Prompt re-login instead of
+        // silently returning [] and leaving the view blank.
         if (res.status === 401 || res.status === 403) { handleAuthExpired(); return []; }
         if (!res.ok) return [];
         const data = await res.json();
@@ -2996,9 +3613,8 @@ async function apiGet(path) {
     } catch (e) { return []; }
 }
 
-// Like apiGet but for routes that return a JSON OBJECT (not an array). apiGet
-// would coerce an object to [] and blank the view — this returns the object (or
-// null on any failure). Same 401/403 → re-login handling as apiGet.
+// Like apiGet but for routes returning a JSON object: apiGet would coerce it to [] and blank
+// the view. Returns the object, or null on any failure. Same 401/403 re-login handling.
 async function apiGetObj(path) {
     try {
         const res = await fetch(getApiBase() + path, { headers: authHeaders() });
@@ -3033,17 +3649,16 @@ async function apiPost(path, body) {
             headers: authHeaders({'Content-Type': 'application/json'}),
             body: JSON.stringify(body || {}),
         });
-        // Expired/absent token → prompt re-login rather than a misleading "failed"
-        // toast on the caller (e.g. the compliance Run-audit buttons).
+        // An expired or absent token prompts re-login rather than a misleading "failed"
+        // toast on the caller.
         if (res.status === 401 || res.status === 403) { handleAuthExpired(); return null; }
         if (!res.ok) return null;
         return await res.json();
     } catch (e) { return null; }
 }
 
-// On-demand Responsible AI re-score. Calls POST /rai/score (the rai-scorer
-// Lambda, which also runs daily on EventBridge), then refreshes the live scores
-// into the view. Falls back gracefully if the API is unavailable.
+// On-demand Responsible AI re-score: POST /rai/score (the rai-scorer Lambda, which also runs
+// daily on EventBridge), then refresh the live scores into the view.
 async function rescoreRai() {
     const btn = document.getElementById('raiRescoreBtn');
     const original = btn ? btn.textContent : '';
@@ -3062,9 +3677,11 @@ async function rescoreRai() {
 
 // Maps the backend platform key to its Platform Integrations display name.
 const DISCOVERY_PLATFORM_NAMES = {
-    native: 'AWS Bedrock / Strands',
+    // Must match the tile's `name` in platformIntegrations exactly: loadDiscoveryStatus
+    // looks the tile up by name, and a mismatch silently unshifts a duplicate tile.
+    native: 'AWS Bedrock Local Account',
     'aws-org': 'AWS Organization (cross-account)',
-    microsoft: 'Microsoft Copilot Studio',
+    microsoft: 'Microsoft Foundry',
     okta: 'Okta Secure AI',
     mulesoft: 'MuleSoft Agent Fabric',
 };
@@ -3072,27 +3689,42 @@ const DISCOVERY_PLATFORM_NAMES = {
 // Trigger a discovery sync (all platforms, or a subset), then refresh status,
 // live data and the registry. Surfaces discovered/removed counts in a toast.
 async function syncDiscovery(platforms) {
-    // When the AgentCore discovery-scanner is deployed, the Discover button (called
-    // with no explicit platforms) triggers a real native scan + LLM classification
-    // via POST /discovery/scan. A per-connector Discover (explicit platforms, e.g.
-    // ['okta']) still uses the Lambda /discovery/sync. When the scanner is not
-    // deployed, everything falls back to /discovery/sync.
+    // With the AgentCore discovery-scanner deployed, the Discover button (no explicit
+    // platforms) triggers a native scan plus LLM classification via POST /discovery/scan. A
+    // per-connector Discover uses the Lambda /discovery/sync, as does everything when the
+    // scanner is not deployed.
     const useScanner = window.DISCOVERY_SCAN_ENABLED === true && !platforms;
     if (useScanner) {
-        // Fire-and-forget: /discovery/scan returns 202 immediately, then the LLM
-        // scanner runs ~60-90s in the background and writes agents to the table.
-        // We can't block on it (API Gateway caps at 29s), so kick it off, tell the
-        // user it's running, and poll the registry a few times so results appear
-        // without a manual reload.
-        const result = await scanDiscoveryCall();
-        if (!result) { showToast('Discovery scan failed to start', {pending:false}); return; }
-        showToast('Discovery scan running — the agent is discovering and classifying your agents. Results will appear here in about a minute.', {pending:true, duration:7000});
+        // Fire-and-forget: /discovery/scan returns 202, then the LLM scanner runs for about
+        // 60-90s in the background and writes agents to the table. API Gateway caps at 29s,
+        // so blocking is not an option; poll the registry instead so results appear without
+        // a manual reload.
+        //
+        // Both halves must run. /discovery/scan covers only this account's AgentCore and
+        // Classic agents; the Lambda connectors (AWS Organizations, Microsoft Foundry, the
+        // simulated ones) are reached only by /discovery/sync. They are independent
+        // fire-and-forget endpoints, so fire them together and let the one poll loop below
+        // surface results from either.
+        const [result, syncResult] = await Promise.all([
+            scanDiscoveryCall(),
+            syncDiscoveryCall(),
+        ]);
+        if (!result && !syncResult) { showToast('Discovery failed to start', {pending:false}); return; }
+        // Name what is running: the two halves finish at different times, and a partial
+        // failure must not read as total success.
+        const started = [result ? 'this account' : null, syncResult ? 'connectors and member accounts' : null]
+            .filter(Boolean).join(' + ');
+        showToast('Discovery running across ' + started + '. Results will appear here in about a minute.', {pending:true, duration:7000});
+        if (!result) showDiscoveryError('The in-account scan failed to start; connector discovery is still running.', true);
+        if (!syncResult) showDiscoveryError('Connector discovery failed to start; the in-account scan is still running.', true);
         // Poll the registry so freshly-committed agents surface on their own.
         let elapsed = 0;
         const before = registryData.length;
         const poll = setInterval(async () => {
             elapsed += 15;
-            await loadDiscoveryStatus(); await fetchLiveData(); await loadRegistry();
+            // Connector config too: a sync can change a connector's status and coverage
+            // summary, so refreshing only the counts leaves the tile self-contradictory.
+            await loadConnectorConfigs(); await loadDiscoveryStatus(); await fetchLiveData(); await loadRegistry();
             if (registryData.length > before) {
                 showToast('Discovery scan committed ' + (registryData.length - before) + ' agent(s) to the registry.');
             }
@@ -3100,19 +3732,25 @@ async function syncDiscovery(platforms) {
         }, 15000);
         return;
     }
-    showToast('Sync started...');
+    // Name the scope: a per-tile Discover syncs one connector, which an unqualified "Sync
+    // started" would not distinguish from a full discovery run.
+    const scopeLabel = (Array.isArray(platforms) && platforms.length)
+        ? platforms.map(p => connectorLabel(p)).join(', ')
+        : 'all connectors';
+    showToast('Sync started for ' + scopeLabel + '...');
     const result = await syncDiscoveryCall(platforms);
-    if (!result) { showToast('Sync failed'); return; }
-    // The sync endpoint is now fire-and-forget: it returns {status:'started'} and
-    // runs the (possibly multi-account, slow) scan in the background. Poll the
-    // registry so results surface without a manual reload. (Older synchronous
-    // responses returned an array — handle that too for safety.)
+    if (!result) { showToast('Sync failed for ' + scopeLabel); return; }
+    // The sync endpoint is fire-and-forget: it returns {status:'started'} and runs the
+    // possibly slow multi-account scan in the background, so poll the registry. An array
+    // response (the older synchronous shape) is handled too.
     if (!Array.isArray(result) && result.status === 'started') {
         showDiscoveryError('Discovery sync running — scanning connectors/accounts. Results appear in the registry shortly.', true);
         let elapsed = 0; const before = registryData.length;
         const poll = setInterval(async () => {
             elapsed += 15;
-            await loadDiscoveryStatus(); await fetchLiveData(); await loadRegistry();
+            // Connector config too: a sync can change a connector's status and coverage
+            // summary, so refreshing only the counts leaves the tile self-contradictory.
+            await loadConnectorConfigs(); await loadDiscoveryStatus(); await fetchLiveData(); await loadRegistry();
             if (registryData.length !== before) {
                 showToast('Discovery updated the registry (' + registryData.length + ' agents).');
             }
@@ -3180,7 +3818,10 @@ async function loadDiscoveryStatus() {
         if (row) {
             row.agents = s.count || 0;
             row.lastSync = lastSync;
-            row.status = 'connected';
+            // A connector with a config API owns its own connected/available state
+            // (loadConnectorConfigs). Leftover agent rows from a deleted connector
+            // must not make its tile claim to be connected again.
+            if (!row.configurable) row.status = 'connected';
         } else {
             const abbr = name.split(/[\s/]+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
             platformIntegrations.unshift({name, icon: abbr, status: 'connected', agents: s.count || 0, lastSync, platform: plat});
@@ -3200,21 +3841,47 @@ async function loadRegistry() {
             category: a.category || '—',
             system: a.system || '—',
             status: a.status || 'active',
-            // Do NOT default to a native runtime label — external-connector agents (Okta,
-            // MuleSoft, Copilot Studio) carry their own platform runtime, and a
-            // real native agent sets it too. '—' when genuinely unknown.
+            // Do NOT default to a native runtime label: external-connector agents carry
+            // their own platform runtime and a native agent sets it too, so '—' when
+            // genuinely unknown.
             runtime: a.runtime || '—',
             source: a.source || '',
             // Manually-registered agents carry createdAt; discovered native agents
             // carry discoveredAt/lastSyncedAt instead. Fall back so the Registered
             // column is never blank for a real discovered agent.
             registered: (a.createdAt || a.discoveredAt || a.lastSyncedAt || '').slice(0, 10) || '—',
-            owner: a.owner || 'Unassigned',
+            // Keep the row's owner exactly as the server has it, empty included. An
+            // 'Unassigned' default here would make every agent look owned to the activation
+            // gate, which asks only whether owner is set. The word is a rendering
+            // placeholder and belongs in the renderers.
+            owner: a.owner || '',
+            // The scanner's proposed owner, so the panel can show it as "(suggested)" and the
+            // activation prompt can prefill it. A suggestion is never an owner, so it must
+            // stay a separate field from `owner`.
+            suggestedOwner: a.suggestedOwner || '',
             agentId: a.agentId,
             platform: a.platform,
+            // Provenance from the source platform (Foundry subscription/project/model, org
+            // account and region). This projection is an explicit field list, so a field
+            // omitted here never reaches the detail panel; since agentId is the bare agent
+            // name, this object is the only place an operator can see where the agent lives.
+            platformMetadata: a.platformMetadata,
             system: a.system || '—',
             score: a.score, fairness: a.fairness, transparency: a.transparency,
             accountability: a.accountability, ethics: a.ethics,
+            // The scorer marks agents it cannot grade (non-AWS runtimes) rather than leaving
+            // them at 0. Both fields must reach the row or the detail panel renders that 0
+            // as a genuine failing score.
+            raiScoreStatus: a.raiScoreStatus, raiScoreReason: a.raiScoreReason,
+            // The platform's run state, a different question from `status` above: that one
+            // records whether a human accepted responsibility, this one whether the agent is
+            // running. All three fields are needed: the bucket to colour it, the raw
+            // platform string so the operator sees what the platform said, and the sample
+            // time because discovery runs on a schedule and a stale reading must not look
+            // live.
+            platformStatus: a.platformStatus || '',
+            platformStatusRaw: a.platformStatusRaw || '',
+            platformStatusAt: a.platformStatusAt || '',
             monthlyCost: a.monthlyCost, costPerInvocation: a.costPerInvocation, utilization: a.utilization,
             reason: a.reason,
         }));
@@ -3236,10 +3903,13 @@ async function fetchLiveData() {
             // Merge live agent rows into the RAI + FinOps views (match by name).
             agentsRes.forEach(a => {
                 const ai = aiScoresData.find(s => s.name === a.name);
-                // Only overwrite a field when the backend actually returns it: a
-                // discovered or freshly-registered agent has 0/absent metrics that
-                // would otherwise blank the seeded view (or push NaN through it).
-                if (ai && a.score) { Object.assign(ai, {score:a.score,fairness:a.fairness,transparency:a.transparency,accountability:a.accountability,ethics:a.ethics}); }
+                // Only overwrite a field when the backend returns it: a discovered or
+                // freshly-registered agent has absent or 0 metrics that would blank the
+                // seeded view or push NaN through it. A not-scored agent carries no score,
+                // but the flag still has to land on the RAI row so the scores view stops
+                // showing it a number.
+                if (ai && a.raiScoreStatus === 'not-scored') { Object.assign(ai, {raiScoreStatus:'not-scored', raiScoreReason:a.raiScoreReason||''}); }
+                else if (ai && a.score) { Object.assign(ai, {score:a.score,fairness:a.fairness,transparency:a.transparency,accountability:a.accountability,ethics:a.ethics,raiScoreStatus:a.raiScoreStatus||'',raiScoreReason:a.raiScoreReason||''}); }
                 const fin = finopsData.find(f => f.name === a.name);
                 if (fin) {
                     if (a.monthlyCost != null && !isNaN(Number(a.monthlyCost))) fin.cost = Number(a.monthlyCost);
@@ -3273,8 +3943,17 @@ document.addEventListener('DOMContentLoaded', async function() {
     initTicker();
     renderTopology();
     await loadRegistry();
+    // Connector configs before discovery status: the status pass reads `configurable`
+    // to decide which tiles it may relabel.
+    await loadConnectorConfigs();
     await loadDiscoveryStatus();
-    setInterval(loadDiscoveryStatus, 60000);
+    // Refresh the connector config on the same cadence as the counts: they are two halves of
+    // one tile (loadConnectorConfigs owns the status pill and coverage line,
+    // loadDiscoveryStatus owns the agent count), so refreshing only the counts leaves a tile
+    // reading "1 agent" next to "not configured" when a connector is configured outside this
+    // tab. Config first, because the status pass reads `configurable` to decide which tiles
+    // it may relabel.
+    setInterval(async () => { await loadConnectorConfigs(); await loadDiscoveryStatus(); }, 60000);
     // Fleet compliance grades (populates the sidebar badge + the Compliance view).
     // Runs after loadRegistry so agentId→name resolution is available.
     await loadComplianceFleet();
@@ -3755,9 +4434,9 @@ function renderAgentGraph(){
     g.nodes.forEach(n=>{
         const c=typeColor[n.type]||'#8b949e';
         const lines=n.label.split('\n');
-        // Node identity is carried in data-* attributes (escaped for the attribute
-        // context) and dispatched via a delegated listener below — no inline onclick
-        // string interpolation, so node ids can never break out into executable JS.
+        // Node identity is carried in data-* attributes (escaped for the attribute context)
+        // and dispatched by the delegated listener below. No inline onclick interpolation,
+        // so a node id cannot break out into executable JS.
         const dataAttrs=`data-graph-key="${esc(key)}" data-node-id="${esc(n.id)}"`;
         if(n.type==='terminal'){
             s+=`<g class="gnode" id="gn-${esc(n.id)}" ${dataAttrs}>
@@ -3778,8 +4457,8 @@ function renderAgentGraph(){
     });
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     svg.innerHTML=s;
-    // Delegated click handler: reads node identity from data-* attributes instead
-    // of inline onclick, treating ids as inert strings (no code injection).
+    // Delegated click handler: reads node identity from data-* attributes rather than an
+    // inline onclick, so ids stay inert strings.
     svg.querySelectorAll('g.gnode').forEach(node=>{
         node.addEventListener('click',()=>inspectGraphNode(node.getAttribute('data-graph-key'),node.getAttribute('data-node-id')));
     });
@@ -4564,10 +5243,13 @@ function renderTopology() {
             const ay=cy+Math.sin(aAngle)*(aR*0.82);
             const sc=aiScoresData.find(x=>x.name===agent);
             const score=sc?sc.score:90;
-            const nc=score>=95?'#4ade80':score>=92?'#60b0ff':'#f0a030';
+            // Grey dot + "not scored" tooltip when the scorer declined to grade it, so
+            // the colour scale is never read as a low score.
+            const notScored=raiNotScored(sc);
+            const nc=notScored?'#7a8a9c':(score>=95?'#4ade80':score>=92?'#60b0ff':'#f0a030');
             s+=`<line x1="${catX}" y1="${catY}" x2="${ax}" y2="${ay}" stroke="${color}" stroke-width="0.4" opacity="0.1"/>`;
             s+=`<g style="cursor:pointer" onclick="showAgentDetail('${esc(agent)}')">`;
-            s+=`<circle cx="${ax}" cy="${ay}" r="7" fill="#0d1117" stroke="${nc}" stroke-width="1.5" filter="url(#glow)"><title>${agent} — Score: ${score}</title></circle>`;
+            s+=`<circle cx="${ax}" cy="${ay}" r="7" fill="#0d1117" stroke="${nc}" stroke-width="1.5" filter="url(#glow)"><title>${esc(agent)} — ${notScored?'not scored: '+esc(raiReason(sc)):'Score: '+score}</title></circle>`;
             s+=`<circle cx="${ax}" cy="${ay}" r="3" fill="${nc}" opacity="0.8"/>`;
             s+=`</g>`;
             s+=`<circle cx="${ax}" cy="${ay}" r="7" fill="none" stroke="${nc}" stroke-width="0.4" opacity="0"><animate attributeName="r" values="7;14;14" dur="3.5s" begin="${(ai*0.5).toFixed(1)}s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.4;0;0" dur="3.5s" begin="${(ai*0.5).toFixed(1)}s" repeatCount="indefinite"/></circle>`;
@@ -4635,7 +5317,8 @@ function topoZoomIn(ci) {
             const y = startY + row * (cardH + gapY);
             const sc = aiScoresData.find(s=>s.name===agent);
             const score = sc ? sc.score : 90;
-            const nc = score>=95?'#4ade80':score>=92?'#60b0ff':'#f0a030';
+            const notScored = raiNotScored(sc);
+            const nc = notScored?'#7a8a9c':(score>=95?'#4ade80':score>=92?'#60b0ff':'#f0a030');
             const fin = finopsData.find(f=>f.name===agent);
             const cost = fin ? '$'+fin.cost : '—';
             const delay = (ai * 0.04 + 0.15).toFixed(2);
@@ -4651,9 +5334,10 @@ function topoZoomIn(ci) {
             d += `<circle cx="${x+24}" cy="${y+30}" r="5" fill="${nc}" filter="url(#glow)"/>`;
             // Name
             const displayName = agent.length > 25 ? agent.slice(0,24)+'…' : agent;
-            d += `<text x="${x+42}" y="${y+34}" fill="#f6f8fa" font-size="15" font-weight="600">${displayName}</text>`;
+            d += `<text x="${x+42}" y="${y+34}" fill="#f6f8fa" font-size="15" font-weight="600">${esc(displayName)}</text>`;
             // Stats
-            d += `<text x="${x+24}" y="${y+62}" fill="#555" font-size="13">RAI <tspan fill="${nc}" font-weight="700">${score}</tspan></text>`;
+            // SVG text, so the shared raiNotScoredHtml() span cannot be used here.
+            d += `<text x="${x+24}" y="${y+62}" fill="#555" font-size="13">RAI <tspan fill="${nc}" font-weight="700">${notScored?'not scored':score}</tspan><title>${notScored?esc(raiReason(sc)):''}</title></text>`;
             d += `<text x="${x+90}" y="${y+62}" fill="#555" font-size="13">Cost <tspan fill="#f0a030" font-weight="600">${cost}</tspan>/mo</text>`;
             // Status dot
             d += `<circle cx="${x+cardW-18}" cy="${y+30}" r="5" fill="#4ade80" filter="url(#glow)"/>`;
@@ -4664,7 +5348,9 @@ function topoZoomIn(ci) {
         // Summary bar
         const sumY = startY + gridH + 24;
         const totalCost = agents.reduce((s,a) => { const f = finopsData.find(x=>x.name===a); return s + (f?f.cost:0); }, 0);
-        const avgScore = Math.round(agents.reduce((s,a) => { const x = aiScoresData.find(z=>z.name===a); return s + (x?x.score:91); }, 0) / agents.length);
+        // Average over the agents that actually carry a score; '—' when none do.
+        const scoredHere = agents.map(a => aiScoresData.find(z=>z.name===a)).filter(x => x && !raiNotScored(x));
+        const avgScore = scoredHere.length ? Math.round(scoredHere.reduce((s,x) => s + x.score, 0) / scoredHere.length) : '—';
         const sumDelay = (agents.length * 0.04 + 0.2).toFixed(2);
         d += `<g style="opacity:0;animation:topoCardIn 0.35s ${sumDelay}s forwards">`;
         d += `<rect x="${startX}" y="${sumY}" width="${gridW}" height="46" rx="10" fill="#2e4058" stroke="#2e4058"/>`;
@@ -4716,7 +5402,7 @@ function buildCmdIndex() {
     // Agents
     agentCategories.forEach(c => (categoryAgents[c.name]||[]).forEach(a => {
         const ai = aiScoresData.find(s=>s.name===a);
-        items.push({type:'agent',name:a,desc:`${c.name}${ai?' · Score: '+ai.score:''}`,icon:iconMap[c.name]||'🤖',action:()=>{showAgentDetail(a);closeCmdPalette();}});
+        items.push({type:'agent',name:a,desc:`${c.name}${ai?(raiNotScored(ai)?' · Not scored':' · Score: '+ai.score):''}`,icon:iconMap[c.name]||'🤖',action:()=>{showAgentDetail(a);closeCmdPalette();}});
     }));
     // AOP
     aopsData.forEach(a => items.push({type:'aop',name:`${a.id}: ${a.name}`,desc:`${a.status} · ${a.owner}`,icon:'📋',action:()=>{showTab('aops',document.querySelector("[onclick*='aops']"));setTimeout(()=>toggleAop(a.id),100);closeCmdPalette();}}));
@@ -4749,9 +5435,8 @@ function filterCmdResults(q) {
 function getChatApi() { return window.CHAT_API_URL || getApiBase() + '/chat'; }
 let chatSessionId = 'session-' + Date.now();
 
-// Minimal, dependency-free Markdown -> HTML for assistant chat replies.
-// Escapes first (XSS-safe), then renders a safe subset: bold, italic, inline
-// code, fenced/indented code, headings, and bullet/numbered lists.
+// Minimal, dependency-free Markdown to HTML for assistant chat replies. Escapes first, then
+// renders a safe subset: bold, italic, inline and fenced code, headings, and lists.
 function renderMarkdown(src) {
     const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const inline = s => esc(s)
@@ -4762,9 +5447,8 @@ function renderMarkdown(src) {
     let html = '', listType = null, inCode = false, code = '';
     const closeList = () => { if (listType) { html += listType === 'ol' ? '</ol>' : '</ul>'; listType = null; } };
 
-    // GFM pipe tables. The harness answers registry questions with tables far more
-    // often than the old action-group agent did, and without this they fell through
-    // to the plain-text branch and rendered as literal rows of pipes.
+    // GFM pipe tables. The harness answers registry questions with tables, which without
+    // this fall through to the plain-text branch and render as literal rows of pipes.
     const splitRow = (l) => l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
     const isDivider = (l) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l) && l.includes('-');
     const TD = 'padding:5px 9px;border:1px solid #2e4058;text-align:left;vertical-align:top';
@@ -4802,16 +5486,14 @@ function renderMarkdown(src) {
         const h = line.match(/^(#{1,4})\s+(.*)$/);
         const ol = line.match(/^\s*\d+\.\s+(.*)$/);
         const ul = line.match(/^\s*[-*]\s+(.*)$/);
-        // Horizontal rule. Checked before headings so a '---' separator is not
-        // mistaken for setext underlining, and before the plain-text branch so it
-        // does not render as three literal dashes (the harness uses these as
-        // section separators).
-        // Three or more of the SAME delimiter. Written as explicit alternation rather
-        // than a capture-group backreference (/([-*_])\s*\1\s*\1/): Semgrep's JS parser
-        // fails on the backreference form, and a file whose script block will not parse
-        // is reported as one block-level finding at the <script> tag — which no
-        // line-level `nosemgrep` comment can suppress, because there is no line to
-        // attach it to. Behaviour is identical, including rejecting mixed runs like -_-.
+        // Horizontal rule: three or more of the same delimiter. Checked before headings so a
+        // '---' separator is not read as setext underlining, and before the plain-text branch
+        // so it does not render as three literal dashes.
+        //
+        // Written as explicit alternation rather than a capture-group backreference
+        // (/([-*_])\s*\1\s*\1/), which Semgrep's JS parser fails on; a script block it cannot
+        // parse is reported as one block-level finding at the <script> tag, which no
+        // line-level `nosemgrep` can suppress. Behaviour is identical, mixed runs included.
         if (/^\s*(?:-\s*-\s*-[-\s]*|\*\s*\*\s*\*[*\s]*|_\s*_\s*_[_\s]*)$/.test(line)) {
             closeList();
             html += '<hr style="border:none;border-top:1px solid #2e4058;margin:10px 0">';
@@ -4841,11 +5523,9 @@ function setChatMsg(div, role, text) {
     else { div.style.whiteSpace = 'normal'; div.innerHTML = renderMarkdown(text); }
 }
 
-// Render the per-chat trace the api-handler returns: which registry tools the agent
-// chose, and the real token counts. This is the tool-call audit trail the governance
-// story rests on — showing not just that the agent answered, but what it consulted
-// and what the turn cost. Appended under the reply rather than in a separate panel so
-// it stays tied to the message it describes.
+// Render the per-chat trace the api-handler returns: which registry tools the agent chose
+// and the real token counts, so a turn shows what it consulted and what it cost. Appended
+// under the reply rather than in a separate panel so it stays tied to its message.
 function appendChatTrace(div, trace) {
     if (!trace) return;
     const calls = Array.isArray(trace.toolCalls) ? trace.toolCalls : [];
@@ -4868,8 +5548,8 @@ function appendChatTrace(div, trace) {
     foot.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid #2e4058;'
         + 'font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#9aacbe;'
         + 'line-height:1.7';
-    // Each part is wrapped so the separator survives; a flex gap would not apply to
-    // sibling spans inside one innerHTML assignment.
+    // Each part is wrapped so the separator survives: a flex gap does not apply to sibling
+    // spans inside one innerHTML assignment.
     // nosemgrep: insecure-document-method - innerHTML sink; tool names are esc()-encoded, token counts are coerced with Number(), rest is static markup
     foot.innerHTML = parts.map(p => `<span style="margin-right:14px">${p}</span>`).join('');
     div.appendChild(foot);
