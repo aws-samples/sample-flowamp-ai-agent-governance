@@ -4,7 +4,8 @@
 
 Aligns to NIST AI RMF GOVERN/MAP/MEASURE/MANAGE.
 Moderate-tier checks (decision-trace-coverage, prompt-versioning, iam-no-wildcard-actions)
-are placeholders deferred to U-079.
+are not yet implemented and are therefore absent from the checks lists below, not present
+and always failing.
 """
 
 NIST_AI_RMF_TEMPLATE: dict = {
@@ -17,7 +18,7 @@ NIST_AI_RMF_TEMPLATE: dict = {
         "perDimension": {
             "fairness": {
                 "checks": ["guardrail-attached", "guardrail-content-policy"],
-                # Deferred to U-079: "guardrail-intervention-rate", "negative-feedback-rate"
+                # Not yet implemented: "negative-feedback-rate".
                 "weights": {
                     "guardrail-attached": 0.5,
                     "guardrail-content-policy": 0.5,
@@ -26,7 +27,7 @@ NIST_AI_RMF_TEMPLATE: dict = {
             },
             "transparency": {
                 "checks": ["bedrock-invocation-logging", "aop-coverage"],
-                # Deferred to U-079: "decision-trace-coverage", "prompt-versioning"
+                # Not yet implemented: "decision-trace-coverage", "prompt-versioning".
                 "weights": {
                     "bedrock-invocation-logging": 0.5,
                     "aop-coverage": 0.5,
@@ -35,7 +36,7 @@ NIST_AI_RMF_TEMPLATE: dict = {
             },
             "accountability": {
                 "checks": ["owner-populated", "escalation-group-assigned"],
-                # Deferred to U-079: "iam-no-wildcard-actions"
+                # Not yet implemented: "iam-no-wildcard-actions".
                 "weights": {
                     "owner-populated": 0.5,
                     "escalation-group-assigned": 0.5,

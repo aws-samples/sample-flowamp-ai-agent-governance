@@ -6,21 +6,22 @@ import { Construct } from "constructs";
 import { SAMPLE_AGENTS, addSampleHarness } from "./sample-agents";
 
 /**
- * SampleAgentsStack — deploys ONLY the three standalone sample agents (insurance
- * claims triage, supply-chain analyst, service request intake). No FlowAMP platform:
- * no DynamoDB, API Gateway, Cognito, UI, or governance agents.
+ * Deploys only the three standalone sample agents (insurance claims triage, supply-chain
+ * analyst, service request intake), with no FlowAMP platform: no DynamoDB, API Gateway,
+ * Cognito, UI, or governance agents.
  *
- * Use this to stand up just the sample workloads in a separate account for testing —
- * e.g. so a FlowAMP instance running elsewhere has real cross-account agents to
- * discover. The agent definitions live in ./sample-agents, shared with TeamStack.
+ * Use this to stand up just the sample workloads in a separate account, for example so a
+ * FlowAMP instance running elsewhere has real cross-account agents to discover. The agent
+ * definitions live in ./sample-agents, shared with TeamStack.
  */
 export class SampleAgentsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Model the sample agents invoke. Same model the rest of the repo pins.
-    const inferenceProfileId = "us.anthropic.claude-sonnet-4-6";
-    const baseModelId = "anthropic.claude-sonnet-4-6";
+    // Model the sample agents invoke. Keep this in step with team-stack.ts, since the two
+    // stacks can deploy into the same account.
+    const inferenceProfileId = "us.anthropic.claude-sonnet-5";
+    const baseModelId = "anthropic.claude-sonnet-5";
     const inferenceProfileArn = `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${inferenceProfileId}`;
 
     const modelInvokeStatement = new iam.PolicyStatement({
@@ -42,7 +43,7 @@ export class SampleAgentsStack extends cdk.Stack {
         account: this.account,
         inferenceProfileId,
         modelInvokeStatement,
-        // So a FlowAMP running elsewhere can attribute spend and discovery can key on it.
+        // Lets a FlowAMP running elsewhere attribute spend and key discovery on it.
         costTagKey: "flowamp:agentId",
       })
     );

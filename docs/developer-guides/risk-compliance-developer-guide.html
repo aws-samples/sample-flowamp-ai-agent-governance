@@ -44,7 +44,7 @@
 <p class="subtitle">FlowAMP AI Agent Governance · How the compliance-scanner produces real A–F audit grades</p>
 
 <div class="card">
-  <strong>Context:</strong> FlowAMP grades every governed agent against compliance frameworks using the <strong>compliance-scanner</strong> — an AgentCore Runtime (a Strands agent on <span class="ic">us.anthropic.claude-sonnet-4-6</span>) that combines a deterministic checks library with LLM judgement. This is <strong>real and wired end-to-end</strong>: on a daily schedule and on demand, the scanner runs ~23 deterministic checks across five frameworks, authors a narrative + recommendations, and writes an <span class="ic">AUDIT#&lt;ts&gt;</span> row (plus a projected <span class="ic">lastAuditedAt</span>) that the UI reads back as an A–F grade. This guide documents the current implementation and flags the parts that are still stubbed for production hardening.
+  <strong>Context:</strong> FlowAMP grades every governed agent against compliance frameworks using the <strong>compliance-scanner</strong> — an AgentCore Runtime (a Strands agent on <span class="ic">us.anthropic.claude-sonnet-5</span>) that combines a deterministic checks library with LLM judgement. This is <strong>real and wired end-to-end</strong>: on a daily schedule and on demand, the scanner runs ~23 deterministic checks across five frameworks, authors a narrative + recommendations, and writes an <span class="ic">AUDIT#&lt;ts&gt;</span> row (plus a projected <span class="ic">lastAuditedAt</span>) that the UI reads back as an A–F grade. This guide documents the current implementation and flags the parts that are still stubbed for production hardening.
 </div>
 
 <div class="card" style="border-color: var(--green);">
@@ -68,7 +68,7 @@
                            ▼
 ┌──────────────────────────────────────────────────────┐
 │  compliance-scanner  (AgentCore Runtime, Strands)      │
-│  model: us.anthropic.claude-sonnet-4-6                  │
+│  model: us.anthropic.claude-sonnet-5                   │
 │                                                        │
 │   1. get_agent + list_applicable_frameworks            │
 │   2. read_past_audits + read_past_overrides            │
@@ -359,7 +359,7 @@ new cdk.CfnOutput(this, "ComplianceScannerRuntimeArn", { value: complianceScanne
 <table>
   <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
   <tbody>
-    <tr><td><strong>compliance-scanner runtime</strong></td><td class="status-compliant">REAL</td><td>AgentCore Runtime, Strands agent on <span class="ic">us.anthropic.claude-sonnet-4-6</span>, deployed always.</td></tr>
+    <tr><td><strong>compliance-scanner runtime</strong></td><td class="status-compliant">REAL</td><td>AgentCore Runtime, Strands agent on <span class="ic">us.anthropic.claude-sonnet-5</span>, deployed always.</td></tr>
     <tr><td><strong>Deterministic checks (~23)</strong></td><td class="status-compliant">REAL</td><td>Live against Bedrock guardrails, IAM, CloudWatch, Config, S3, AgentTable. AccessDenied/unavailable → <span class="ic">skip</span>.</td></tr>
     <tr><td><strong>5 frameworks + grading</strong></td><td class="status-compliant">REAL</td><td>baseline, nist-ai-rmf, iso-27001, soc-2, nerc-cip. A–F composite grades from the rubric.</td></tr>
     <tr><td><strong>Triggers</strong></td><td class="status-compliant">REAL</td><td>Daily 04:00 UTC rotation + on-demand <span class="ic">POST /compliance/scan</span> via fire-and-forget invoker (202 + async self-invoke).</td></tr>

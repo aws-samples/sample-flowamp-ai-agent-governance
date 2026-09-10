@@ -7,7 +7,7 @@ and confidentiality (C1). Fairness is not a SOC 2 criterion, so that
 dimension has zero weight — the RAI Scorer must handle empty/zero-weight
 dimensions cleanly (no ZeroDivisionError).
 
-Note for U-080 (RAI Scorer): the fairness dimension has dimensionWeight=0.0
+The fairness dimension has dimensionWeight=0.0
 and an empty checks list. The scorer must skip zero-weight dimensions from
 the per-framework composite computation.
 """

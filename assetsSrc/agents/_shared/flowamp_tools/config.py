@@ -3,9 +3,8 @@
 """
 Shared AppConfig retrieval utility for all FlowAMP agents and Lambdas.
 
-Fetches model configuration from AWS AppConfig at startup and caches the
-parsed JSON for the lifetime of the Lambda execution context (warm invocations
-skip the network call entirely).
+Fetches model configuration from AWS AppConfig on first use and caches the parsed JSON
+for the life of the execution context, so warm invocations make no network call.
 
 Required environment variables:
   AWS_REGION            — AWS region for the appconfigdata client
@@ -34,10 +33,16 @@ _config_cache: dict | None = None
 
 
 _LOCAL_DEFAULT_CONFIG = {
-    "defaultModel": "us.anthropic.claude-sonnet-4-6",
-    "complianceScannerModel": "us.anthropic.claude-sonnet-4-6",
-    "discoveryEnrichmentModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "evaluationSummaryModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "defaultModel": "us.anthropic.claude-sonnet-5",
+    "complianceScannerModel": "us.anthropic.claude-sonnet-5",
+    # Every key names the same model. `modelInvokeStatement` in team-stack.ts grants the
+    # runtimes any inference profile in this account but only one foundation-model ARN,
+    # the configured base model, and invoking through a profile also authorizes against
+    # the underlying model - so a second model family would be denied.
+    "discoveryEnrichmentModel": "us.anthropic.claude-sonnet-5",
+    # Unreferenced by any shipped code path; kept so a future evaluation summariser has
+    # a configured model rather than hardcoding one.
+    "evaluationSummaryModel": "us.anthropic.claude-sonnet-5",
 }
 
 
