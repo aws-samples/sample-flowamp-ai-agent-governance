@@ -33,11 +33,20 @@ your own AWS account. It uses only public npm packages and the standard `cdk boo
 
 ## Deploy
 
+The stack takes its account and region from the environment; neither is pinned in the code.
+Set them explicitly first, so you know which account and region you are deploying into:
+
+```bash
+export AWS_PROFILE=<your-profile>    # omit if you use the default profile
+export AWS_REGION=<your-region>      # must match where Bedrock model access was granted
+aws sts get-caller-identity
+```
+
 ```bash
 # 1. Install dependencies (public npm only)
 npm install
 
-# 2. Bootstrap the account/region for CDK assets (one time)
+# 2. Bootstrap the account/region for CDK assets (one time per account AND region)
 npx cdk bootstrap
 
 # 3. Synthesize (optional — inspect the CloudFormation) and deploy
@@ -45,10 +54,30 @@ npx cdk synth
 npx cdk deploy
 ```
 
+Two failures that happen before any resource is created, and are about the environment rather than
+the stack:
+
+| Message | Cause |
+|---|---|
+| `Unable to resolve AWS account to use` | No credentials could be resolved. The CLI leaves the account and region unset when it cannot authenticate, so the error names the stack even though the session is at fault. Re-authenticate. |
+| `SSM parameter /cdk-bootstrap/hnb659fds/version not found`, usually after several `could not be used to assume ...-role-<account>-<region>` warnings | The target region is not bootstrapped. Bootstrap it, or set `AWS_REGION` to one you did. The region inside those role names is the one CDK actually resolved, which is the quickest way to see the mismatch. |
+
 `cdk deploy` prints the stack outputs: `DemoUrl`, `ApiUrl`, `LoginUsername`, `LoginPassword`,
 `AgentTableName`, `ManagementHarnessArn`, `AgentManagementGatewayArn`, `UserPoolId`,
 `DiscoveryScannerRuntimeArn`, `ComplianceScannerRuntimeArn`
 (+ `SampleAgentHarnessArns` when `deploySampleAgents=true`).
+
+### Redeploying a UI change
+
+The stack does not invalidate the CloudFront cache on deploy, so that it never needs
+`cloudfront:CreateInvalidation` on `*`. A deploy that changes `assetsSrc/site/` therefore uploads the
+new file while viewers keep the cached one, which looks exactly like a deploy that did not take
+effect. Invalidate it yourself, using the distribution behind the `DemoUrl` output:
+
+```bash
+aws cloudfront create-invalidation --distribution-id <id> \
+  --paths "/agent-management.html" "/"
+```
 
 ### Core AgentCore agents (always deployed)
 

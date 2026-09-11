@@ -32,7 +32,7 @@
 <p class="subtitle">FlowAMP · How real per-agent cost tracking works today, and what's still a production-hardening TODO</p>
 
 <div class="card">
-  <strong>Context:</strong> The FlowAMP dashboard has a FinOps tab showing total monthly spend, cost per invocation, utilization, projected overrun, a 30-day spend trend, a <em>Cost by Component</em> breakdown, and a per-agent cost table. This is <strong>no longer static seed data</strong> — spend is <span class="badge-prod">REAL</span>, pulled daily from <strong>AWS Cost Explorer</strong> by the <span class="ic">finops-collector</span> Lambda and written back as <span class="ic">COST#</span> ledger rows the UI reads. This guide documents how that pipeline actually works in the repo today, and flags the pieces that are still production-hardening TODOs (token-level model cost, forecast, anomaly detection).
+  <strong>Context:</strong> The FlowAMP dashboard has a FinOps tab showing total monthly spend, cost per invocation, utilization, projected overrun, a 30-day spend trend, a <em>Cost by Component</em> breakdown, and a per-agent cost table. Spend is <span class="badge-prod">IMPLEMENTED</span>, pulled daily from <strong>AWS Cost Explorer</strong> by the <span class="ic">finops-collector</span> Lambda and written back as <span class="ic">COST#</span> ledger rows the UI reads. This guide documents how that pipeline actually works in the repo today, and flags the pieces that are still production-hardening TODOs (token-level model cost, forecast, anomaly detection).
 </div>
 
 <h2>How It Works Today (End to End)</h2>
@@ -79,9 +79,9 @@
 <div class="card">
   <table>
     <tr><th>Dashboard Widget</th><th>Status</th><th>How it's computed today</th></tr>
-    <tr><td>Total Monthly Spend</td><td><span class="badge-prod">REAL</span></td><td>Sum of <span class="ic">totalCost</span> across live <span class="ic">COST#</span> rows (Cost Explorer <span class="ic">UnblendedCost</span> grouped by <span class="ic">flowamp:agentId</span>).</td></tr>
-    <tr><td>Cost by Component</td><td><span class="badge-prod">REAL</span> (partial)</td><td>Aggregates <span class="ic">costByComponent</span> (agentCompute / toolExecution / storage) from live rows. <span class="ic">modelInference</span> renders as "not tracked".</td></tr>
-    <tr><td>30-Day Spend Trend</td><td><span class="badge-prod">REAL</span></td><td>Live rows grouped by <span class="ic">date</span>, summed per day, plotted client-side in <span class="ic">renderFinOps()</span>.</td></tr>
+    <tr><td>Total Monthly Spend</td><td><span class="badge-prod">IMPLEMENTED</span></td><td>Sum of <span class="ic">totalCost</span> across live <span class="ic">COST#</span> rows (Cost Explorer <span class="ic">UnblendedCost</span> grouped by <span class="ic">flowamp:agentId</span>).</td></tr>
+    <tr><td>Cost by Component</td><td><span class="badge-prod">IMPLEMENTED</span> (partial)</td><td>Aggregates <span class="ic">costByComponent</span> (agentCompute / toolExecution / storage) from live rows. <span class="ic">modelInference</span> renders as "not tracked".</td></tr>
+    <tr><td>30-Day Spend Trend</td><td><span class="badge-prod">IMPLEMENTED</span></td><td>Live rows grouped by <span class="ic">date</span>, summed per day, plotted client-side in <span class="ic">renderFinOps()</span>.</td></tr>
     <tr><td>Cost per Invocation</td><td><span class="badge-demo">TODO</span></td><td>Needs an invocation count. <span class="ic">invocationCount</span> is written as 0 — no Athena/OTEL count join in this repo. Averages read '—' until real metrics exist.</td></tr>
     <tr><td>Utilization</td><td><span class="badge-demo">TODO</span></td><td>Requires AgentCore Runtime metrics (active vs. provisioned compute). Not collected yet.</td></tr>
     <tr><td>Projected Overrun</td><td><span class="badge-demo">TODO</span></td><td>UI uses a simple <span class="ic">total × 1.03</span> heuristic vs. a hard-coded budget. Cost Explorer <span class="ic">get_cost_forecast()</span> is <em>not</em> wired.</td></tr>

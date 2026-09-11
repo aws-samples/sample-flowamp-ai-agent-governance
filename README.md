@@ -2,12 +2,12 @@
 
 FlowAMP is an **Agent Management Platform** - a single pane of glass to discover, monitor, score,
 control, and cost-account AI agents across an AWS organization. It deploys with AWS CDK into your
-own account and, by default, governs the **real** agents already running there.
+own account and governs the agents already running there.
 
-**Use this as a starting point for a production deployment.** It is a working, deployable control
-plane built on real AWS services - not a mock - but it ships with demo-grade defaults (see
-[Production hardening](#production-hardening) before you rely on it). Fork it, harden the items
-called out below, and extend the connectors/policies for your environment.
+**Use this as a starting point for a production deployment.** It is a working control plane, but it
+ships with demo-grade defaults - see [Production hardening](#production-hardening) before you rely
+on it. Fork it, harden the items called out there, and extend the connectors and policies for your
+environment.
 
 ## Architecture
 
@@ -19,44 +19,44 @@ backend through a Cognito-authorized API Gateway.
 
 ![FlowAMP architecture - chat flows from the CloudFront UI through API Gateway to the AgentCore harness, which reaches the agent-handler Lambda as MCP tools through an AgentCore Gateway; a single DynamoDB table is the data spine, written by the governance agents and by scheduled discovery, RAI-scoring and FinOps Lambdas](static/images/flowamp-architecture.png)
 
-Agents are deployed two ways, and the distinction matters when adding your own:
+## Prerequisites
 
-- **Harness** (`AWS::BedrockAgentCore::Harness`) - model, system prompt and tools declared as
-  configuration; AgentCore runs the agent loop. No container, no code bundle. Used for the
-  management agent and the sample workloads.
-- **Runtime** (`agentcore.Runtime`, direct-code deploy) - your own Python program, packaged as a
-  zip with its arm64 dependencies vendored in at synth time by `cdk/lib/agent-bundle.ts`. Used for
-  the two scanners, which have custom tools, DynamoDB writes and cross-account calls that a
-  harness cannot host.
+- **Node.js 20+** and npm; **[`uv`](https://docs.astral.sh/uv/)** (vendors the agents' arm64 deps).
+- **AWS CLI v2**, used for the preflight checks below and for the optional cost-allocation tag and
+  CloudFront invalidation steps.
+- **AWS credentials** for the target account. For **org discovery**, that account must be the
+  organization **management or a delegated-admin** account.
+- **Amazon Bedrock model access** for `us.anthropic.claude-sonnet-5` (Console → Bedrock → Model
+  access). See [Which model is used, and where](#which-model-is-used-and-where) for what stops
+  working without it. Because that is a **cross-region inference profile** (the `us.` prefix), the
+  entitlement is needed for the underlying model in the profile's regions, not only your deploy
+  region.
 
-> **Bedrock Agents Classic is not used.** It [entered maintenance mode on 2026-07-30](https://docs.aws.amazon.com/bedrock/latest/userguide/agents-classic-maintenance-mode.html):
-> `CreateAgent` is refused in any account without prior Bedrock Agents usage, so a stack that
-> created one could not deploy into a new account. FlowAMP still **discovers and audits** Classic
-> agents you already run, since the read APIs remain available and existing agents keep working -
-> in this account via the `discovery-scanner`, and in member accounts via org discovery.
+## Deploy
 
-| Component | Purpose |
-|---|---|
-| **DynamoDB** `AgentTable` | Single table (PK `agentId`, SK `sk`, PAY_PER_REQUEST, 90-day TTL on `EVENT#` rows). Row types by `sk`: `INFO` (entity), `EVENT#`/`AUDIT#`/`RAI#`/`COST#`/`REVIEW#`/`MODEL#`/`COMPLIANCE#`. |
-| **AgentCore harness: management agent** | Managed agent loop that answers questions over the table, calling the registry tools through the Gateway below. Model via an inference profile (`us.anthropic.claude-sonnet-5`). **Core - always deployed.** |
-| **AgentCore: `discovery-scanner`** | Governance agent that enumerates AND LLM-classifies the account's agents across all three surfaces (AgentCore harnesses, AgentCore runtimes, Bedrock Agents Classic), writing enriched catalog rows. **Owns single-account native discovery. Core - always deployed.** |
-| **AgentCore: `compliance-scanner`** | Governance agent that runs a deterministic compliance-checks framework (baseline / NIST AI RMF / ISO 27001 / SOC 2 / NERC-CIP) plus LLM judgment, writing `AUDIT#` / `RAI#` rows. **Core - always deployed.** |
-| **AgentCore: 3 sample agents** | Optional customer-use-case harnesses (insurance claims triage, supply-chain analyst, service request intake) that give discovery genuine agents to find. Defined in `cdk/lib/sample-agents.ts`, shared with `SampleAgentsStack`. `deploySampleAgents=true`. |
-| **AgentCore Gateway** | Exposes the `agent-handler` Lambda's eight read operations to the harness as MCP tools, with SigV4 inbound auth. Replaces what was a Bedrock Agent action group. |
-| **Lambda `agent-handler`** | Registry read API behind the Gateway. Speaks both the Gateway/MCP shape and the legacy action-group shape, so it stays independently testable. |
-| **Lambda `discovery-handler`** | Real cross-account **org discovery**; the real **Microsoft Foundry** connector, which sweeps one **Azure tenant** from a single service principal - subscriptions → Foundry accounts → projects → agents (live API calls, inert until you configure credentials - see [Connect Microsoft Foundry](#connect-microsoft-foundry)); the still-simulated Okta/MuleSoft connectors (**off unless `seedSampleData=true`**, so a default deploy never writes agents you do not have); and the connector configuration API. Runs every 6h and on API routes. Async fire-and-forget for multi-account scans. |
-| **Lambda `discovery-scan-invoker`** | Bridges the UI **Discover** button to the `discovery-scanner` runtime (which has no API of its own). Backs `POST /discovery/scan`. |
-| **Lambda `compliance-scan-invoker`** | Bridges the UI **Run audit** / daily schedule to the `compliance-scanner` runtime. Fire-and-forget (202 + async self-invoke) since an audit exceeds API Gateway's 29s. Backs `POST /compliance/scan`. |
-| **Lambda `eval-provisioner`** | Creates/enables/disables AgentCore **online evaluation** configs at runtime (one per core agent) via `bedrock-agentcore` control APIs, discovering each agent's live trace log group. Backs `POST /evaluations/enable` / `/disable`. |
-| **Lambda `finops-collector`** | Daily Cost Explorer pull, real per-agent spend by the `flowamp:agentId` tag → `COST#` rows. |
-| **Lambda `cost-tag-activator`** | CFN custom resource that best-effort activates the `flowamp:agentId` cost-allocation tag (management/payer account only). |
-| **Lambda `rai-scorer`** | Daily job computing Responsible-AI scores from CloudWatch + CloudTrail signals. |
-| **Lambda `api-handler`** | API Gateway `POST /chat` → `InvokeHarness`. Returns the answer plus a per-chat trace (which tools the agent called, real token counts). |
-| **Lambda `data-handler`** | REST backend for the UI's data/read + write routes (register, lifecycle, events, costs, compliance audits, evaluation scores + readiness). |
-| **Lambda `seed-data`** | CFN custom resource that seeds a demo catalog. Gated off by default (`seedSampleData`). |
-| **Lambda `cognito-seed-user`** | Seeds the single demo UI user (`flowadmin`) - replace for production (see hardening). |
-| **API Gateway** REST (Cognito-authorized) | `POST /chat`; data routes `/agents` (+`{id}` PATCH, `/lifecycle`, `/audit`, `/evaluations`), `/compliance`, `/aops`, `/access`, `/events`, `/costs`, `/audits`, `/evaluations` (+`/readiness`); `POST /rai/score`; `POST /compliance/scan`; `POST /evaluations/enable`, `POST /evaluations/disable`; `POST /discovery/sync`, `POST /discovery/scan`, `GET /discovery/status`, `GET /discovery/platforms`; connector config `GET /discovery/connectors`, `PUT`/`DELETE /discovery/connectors/{platform}`, `POST /discovery/connectors/{platform}/test`. |
-| **S3 + CloudFront** | Hosts the static UI (`assetsSrc/site/agent-management.html`). |
+All commands run from [`cdk/`](cdk/). See [`cdk/README.md`](cdk/README.md) for details.
+
+FlowAMP takes its **account and region from your environment** - neither is pinned in
+the code - so set them explicitly and confirm what you get before deploying:
+
+```bash
+export AWS_PROFILE=<your-profile>    # omit if you use the default profile
+export AWS_REGION=<your-region>      # must match the region where you granted model access
+aws sts get-caller-identity          # confirm the account you are about to deploy into
+```
+
+Then:
+
+```bash
+cd cdk
+npm install
+npx cdk bootstrap      # one-time per account AND region
+npx cdk deploy
+```
+
+Stack outputs include `DemoUrl` (CloudFront UI), `ApiUrl`, `LoginUsername`/`LoginPassword` (seeded),
+`AgentTableName`, `ManagementHarnessArn`, `AgentManagementGatewayArn`, `UserPoolId`, and
+`DiscoveryScannerRuntimeArn` / `ComplianceScannerRuntimeArn`.
 
 ## What deploys by default
 
@@ -64,18 +64,59 @@ A bare `npx cdk deploy` is **live-only, no seed data**. It deploys:
 
 - the platform (table, API, Cognito, UI) and the **three core AgentCore agents** (management,
   discovery-scanner, compliance-scanner);
-- **real discovery** - single-account native (via the scanner) and cross-account **org discovery**
+- **discovery** - single-account native (via the scanner) and cross-account **org discovery**
   (on by default);
-- the **real Cost Explorer FinOps collector** (on by default);
-- the **real Microsoft Foundry connector**, which stays inert until you configure one Azure tenant's
+- the **Cost Explorer FinOps collector** (on by default);
+- the **Microsoft Foundry connector**, which stays inert until you configure one Azure tenant's
   credentials in the UI ([setup](#connect-microsoft-foundry)).
 
-The agent registry and FinOps dashboard show **only real data** - discovered/registered agents and
-actual Cost Explorer spend. No demo catalog and no synthetic cost unless you opt in.
+The agent registry shows discovered and registered agents, and the FinOps dashboard shows Cost
+Explorer spend. No demo catalog and no synthetic cost unless you opt in.
+
+## First run
+
+`cdk deploy` prints everything you need. Open the **`DemoUrl`** output and sign in with
+**`LoginUsername`** / **`LoginPassword`**.
+
+The catalog starts empty, because FlowAMP only ever shows agents that actually exist in your
+account. To populate it, go to **Agent Discovery** and choose **Discover agents** - one button that
+runs the native scanner and every configured connector. Allow a couple of minutes: the scanner
+classifies each agent with an LLM, so rows appear progressively, and the page refreshes itself every
+minute.
+
+What you should see once it finishes:
+
+- Every discovered agent at **pending-review**, with the platform's own run state beneath it. That
+  pairing is the point: an agent that is already running but has not been reviewed is the finding.
+- **Unassigned** in the Owner column. Activating an agent requires naming an owner - the API refuses
+  otherwise - which you can do from the agent's detail panel or as part of approving it.
+- **Compliance** and **FinOps** empty. No audit has run yet (use **Run audit** on an agent), and
+  Cost Explorer needs the cost-allocation tag activated plus 24 to 48 hours to backfill.
+- **Responsible AI** mostly empty. An agent with no guardrail activity and no CloudTrail events is
+  reported as not scored rather than given a number, so scores appear once agents carry real traffic.
+
+FlowAMP will also list **itself** - its management agent and two scanners are agents in your account,
+and it does not exempt them.
 
 ## Configuration flags
 
-CDK context flags (`-c <flag>=value`):
+Flags are CDK context values, passed as `-c <flag>=value`. The common ones:
+
+```bash
+npx cdk deploy -c deploySampleAgents=true       # 3 sample agents (adds SampleAgentHarnessArns)
+npx cdk deploy -c seedSampleData=true           # demo catalog + simulated Okta/MuleSoft connectors
+npx cdk deploy -c enableOrgDiscovery=false      # turn OFF cross-account org discovery
+npx cdk deploy -c enableCostExplorer=false      # turn OFF the FinOps collector
+```
+
+**Sample agents in a separate account** (e.g. an org member account, to exercise cross-account
+discovery) can be deployed standalone - no platform, just the 3 runtimes:
+
+```bash
+npx cdk deploy --app "npx ts-node --prefer-ts-exts bin/sample-agents.ts" SampleAgentsStack --profile <that-account>
+```
+
+Full reference:
 
 | Flag | Default | Effect |
 |---|---|---|
@@ -119,6 +160,130 @@ CDK context flags (`-c <flag>=value`):
 > [250 MB compressed / 750 MB uncompressed](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html),
 > neither adjustable, and the uncompressed limit is the one that binds in practice (the current
 > bundles sit near 170 MB unzipped, mostly ADOT and the Strands tool extras).
+
+## Connect Microsoft Foundry
+
+The `microsoft` connector is a client for **Microsoft Foundry Agent Service** (formerly Azure AI
+Foundry). It is scoped to **one Azure tenant, not one project**: you supply a tenant ID, a client ID
+and a client secret, and nothing else. FlowAMP discovers downward from those credentials - the
+subscriptions the service principal can see, the Foundry accounts in each of them
+(`Microsoft.CognitiveServices/accounts` with `kind == AIServices`), the projects in each account, and
+the agents in each project. It registers what it finds beside your AWS agents with
+`system: Microsoft Foundry` and a Runtime of `Foundry Prompt Agent` (declarative config, Foundry runs
+the loop) or `Foundry Hosted Agent` (your own container or zip). It is **inert until you configure
+it**: a deploy with no Azure credentials calls nothing and reports the connector as not configured.
+
+This mirrors how FlowAMP's `aws-org` connector sweeps an AWS Organization, and it is simpler: there
+is no per-account role to assume, just one service principal whose Azure RBAC defines its reach.
+
+1. **Register an application in Microsoft Entra ID.** Entra portal → **App registrations** → **New
+   registration**, then add a **client secret** under *Certificates & secrets*. FlowAMP authenticates
+   with the OAuth 2.0 client-credentials grant against
+   `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`. One app registration and one
+   secret cover both Azure planes; only the requested token scope differs -
+   `https://management.azure.com/.default` for the Azure Resource Manager enumeration
+   (subscriptions, Foundry accounts, projects) and `https://ai.azure.com/.default` for reading the
+   agents themselves. Keep the **tenant ID**, **client ID** and secret value.
+2. **Assign `Foundry User` to that application, at the Foundry resource (account) scope.**
+   Listing agents requires the data action
+   `Microsoft.CognitiveServices/accounts/AIServices/agents/read`; `Foundry User`
+   (`53ca6127-db72-4b80-b1b0-d745d6d5456d`) is the narrowest built-in role that carries it. Account
+   scope inherits to every project, so one assignment covers all of them. Azure portal → your
+   Foundry resource → **Access control (IAM)** → **Add role assignment** → `Foundry User` → your
+   app registration. For an estate spanning several Foundry resources, assign at the resource
+   group, subscription or management group scope instead.
+
+   > **Allow up to 30 minutes for the assignment to take effect.** Data-plane authorization is
+   > cached, so `GET /agents` can return **403** well after a correct assignment. If it persists
+   > beyond that, confirm the role reached the **service principal's** object ID - a distinct value
+   > from both the application (client) ID and the app registration's object ID, and the one the
+   > portal does *not* show in its IAM list: `az ad sp show --id <client-id> --query id -o tsv`.
+
+   For tighter privilege than `Foundry User` (which can also create, update and delete agents - more
+   than a governance plane should hold over the agents it audits), a custom role works and is the
+   better production answer. It needs `Microsoft.Authorization/roleDefinitions/write`, so an Azure
+   Owner has to create it:
+
+   ```json
+   {
+     "properties": {
+       "roleName": "FlowAMP Agent Discovery (read-only)",
+       "description": "Lists Foundry agents for governance discovery. No write access.",
+       "assignableScopes": ["/subscriptions/<subscription-id>"],
+       "permissions": [{
+         "actions": ["Microsoft.CognitiveServices/*/read"],
+         "notActions": [],
+         "dataActions": ["Microsoft.CognitiveServices/accounts/AIServices/agents/read"],
+         "notDataActions": []
+       }]
+     }
+   }
+   ```
+3. **There is no endpoint to paste.** FlowAMP reads each Foundry account's own data-plane endpoint
+   from its `properties.endpoints["AI Foundry API"]` value, then calls
+   `GET <endpoint>/agents?api-version=v1` per project, following the paging cursor and filtering by
+   agent `kind`. That is why the connector needs credentials only.
+4. **Configure it in the FlowAMP UI**, in the **Agent Discovery** view's **Platform Integrations**
+   panel. On the Microsoft Foundry tile choose **Edit**, enter the tenant ID, client ID and client
+   secret, and then, in this order:
+
+   1. **Save** - stores the configuration.
+   2. **Test connection** - sweeps the tenant and reports how much of it the credentials reach
+      (subscriptions, Foundry accounts, projects, agents found, and any project it was refused).
+      The test runs against the *stored* configuration, so it has nothing to check until you have
+      saved.
+   3. **Discover** - syncs the agents into the catalog.
+
+   The non-secret settings are stored in `AgentTable`; the client secret goes only to AWS Secrets
+   Manager under `flowamp/connectors/microsoft` and is never returned by the API, which reports only
+   *whether* a credential is set. After the first sync, agents refresh on the 6-hour schedule and
+   whenever you trigger a sync by hand.
+
+What Foundry agents do **not** get, and where the connector's coverage stops, is covered under
+[production hardening](#production-hardening): no per-agent cost, no traffic metrics, no
+Responsible-AI score, no compliance audit, and a discovery reach bounded by the Azure role
+assignments you make outside FlowAMP.
+
+## How FlowAMP works
+
+Agents are deployed two ways, and the distinction matters when adding your own:
+
+- **Harness** (`AWS::BedrockAgentCore::Harness`) - model, system prompt and tools declared as
+  configuration; AgentCore runs the agent loop. No container, no code bundle. Used for the
+  management agent and the sample workloads.
+- **Runtime** (`agentcore.Runtime`, direct-code deploy) - your own Python program, packaged as a
+  zip with its arm64 dependencies vendored in at synth time by `cdk/lib/agent-bundle.ts`. Used for
+  the two scanners, which have custom tools, DynamoDB writes and cross-account calls that a
+  harness cannot host.
+
+> **Bedrock Agents Classic is not used.** It [entered maintenance mode on 2026-07-30](https://docs.aws.amazon.com/bedrock/latest/userguide/agents-classic-maintenance-mode.html):
+> `CreateAgent` is refused in any account without prior Bedrock Agents usage, so a stack that
+> created one could not deploy into a new account. FlowAMP still **discovers and audits** Classic
+> agents you already run, since the read APIs remain available and existing agents keep working -
+> in this account via the `discovery-scanner`, and in member accounts via org discovery.
+
+| Component | Purpose |
+|---|---|
+| **DynamoDB** `AgentTable` | Single table (PK `agentId`, SK `sk`, PAY_PER_REQUEST, 90-day TTL on `EVENT#` rows). Row types by `sk`: `INFO` (entity), `EVENT#`/`AUDIT#`/`RAI#`/`COST#`/`REVIEW#`/`MODEL#`/`COMPLIANCE#`. |
+| **AgentCore harness: management agent** | Managed agent loop that answers questions over the table, calling the registry tools through the Gateway below. Model via an inference profile (`us.anthropic.claude-sonnet-5`). **Core - always deployed.** |
+| **AgentCore: `discovery-scanner`** | Governance agent that enumerates AND LLM-classifies the account's agents across all three surfaces (AgentCore harnesses, AgentCore runtimes, Bedrock Agents Classic), writing enriched catalog rows. **Owns single-account native discovery. Core - always deployed.** |
+| **AgentCore: `compliance-scanner`** | Governance agent that runs a deterministic compliance-checks framework (baseline / NIST AI RMF / ISO 27001 / SOC 2 / NERC-CIP) plus LLM judgment, writing `AUDIT#` / `RAI#` rows. **Core - always deployed.** |
+| **AgentCore: 3 sample agents** | Optional customer-use-case harnesses (insurance claims triage, supply-chain analyst, service request intake) that give discovery genuine agents to find. Defined in `cdk/lib/sample-agents.ts`, shared with `SampleAgentsStack`. `deploySampleAgents=true`. |
+| **AgentCore Gateway** | Exposes the `agent-handler` Lambda's eight read operations to the harness as MCP tools, with SigV4 inbound auth. Replaces what was a Bedrock Agent action group. |
+| **Lambda `agent-handler`** | Registry read API behind the Gateway. Speaks both the Gateway/MCP shape and the legacy action-group shape, so it stays independently testable. |
+| **Lambda `discovery-handler`** | Cross-account **org discovery**; the **Microsoft Foundry** connector, which sweeps one **Azure tenant** from a single service principal - subscriptions → Foundry accounts → projects → agents (live API calls, inert until you configure credentials - see [Connect Microsoft Foundry](#connect-microsoft-foundry)); the still-simulated Okta/MuleSoft connectors (**off unless `seedSampleData=true`**, so a default deploy never writes agents you do not have); and the connector configuration API. Runs every 6h and on API routes. Async fire-and-forget for multi-account scans. |
+| **Lambda `discovery-scan-invoker`** | Bridges the UI **Discover** button to the `discovery-scanner` runtime (which has no API of its own). Backs `POST /discovery/scan`. |
+| **Lambda `compliance-scan-invoker`** | Bridges the UI **Run audit** / daily schedule to the `compliance-scanner` runtime. Fire-and-forget (202 + async self-invoke) since an audit exceeds API Gateway's 29s. Backs `POST /compliance/scan`. |
+| **Lambda `eval-provisioner`** | Creates/enables/disables AgentCore **online evaluation** configs at runtime (one per core agent) via `bedrock-agentcore` control APIs, discovering each agent's live trace log group. Backs `POST /evaluations/enable` / `/disable`. |
+| **Lambda `finops-collector`** | Daily Cost Explorer pull, per-agent spend by the `flowamp:agentId` tag → `COST#` rows. |
+| **Lambda `cost-tag-activator`** | CFN custom resource that best-effort activates the `flowamp:agentId` cost-allocation tag (management/payer account only). |
+| **Lambda `rai-scorer`** | Daily job computing Responsible-AI scores from CloudWatch + CloudTrail signals. |
+| **Lambda `api-handler`** | API Gateway `POST /chat` → `InvokeHarness`. Returns the answer plus a per-chat trace (which tools the agent called, real token counts). |
+| **Lambda `data-handler`** | REST backend for the UI's data/read + write routes (register, lifecycle, events, costs, compliance audits, evaluation scores + readiness). |
+| **Lambda `seed-data`** | CFN custom resource that seeds a demo catalog. Gated off by default (`seedSampleData`). |
+| **Lambda `cognito-seed-user`** | Seeds the single demo UI user (`flowadmin`) - replace for production (see hardening). |
+| **API Gateway** REST (Cognito-authorized) | `POST /chat`; data routes `/agents` (+`{id}` PATCH, `/lifecycle`, `/audit`, `/evaluations`), `/compliance`, `/aops`, `/access`, `/events`, `/costs`, `/audits`, `/evaluations` (+`/readiness`); `POST /rai/score`; `POST /compliance/scan`; `POST /evaluations/enable`, `POST /evaluations/disable`; `POST /discovery/sync`, `POST /discovery/scan`, `GET /discovery/status`, `GET /discovery/platforms`; connector config `GET /discovery/connectors`, `PUT`/`DELETE /discovery/connectors/{platform}`, `POST /discovery/connectors/{platform}/test`. |
+| **S3 + CloudFront** | Hosts the static UI (`assetsSrc/site/agent-management.html`). |
 
 ## Agentic discovery
 
@@ -208,90 +373,37 @@ on demand (the UI **Run audit** / **Audit all agents** buttons → `POST /compli
 Rotation considers every eligible agent by default; add `FLOWAMP_PLATFORMS` rows flagged
 `auditable=true` to restrict it to specific platforms.
 
-## Connect Microsoft Foundry
+## Which model is used, and where
 
-The `microsoft` connector is a real client for **Microsoft Foundry Agent Service** (formerly Azure AI
-Foundry). It is scoped to **one Azure tenant, not one project**: you supply a tenant ID, a client ID
-and a client secret, and nothing else. FlowAMP discovers downward from those credentials - the
-subscriptions the service principal can see, the Foundry accounts in each of them
-(`Microsoft.CognitiveServices/accounts` with `kind == AIServices`), the projects in each account, and
-the agents in each project. It registers what it finds beside your AWS agents with
-`system: Microsoft Foundry` and a Runtime of `Foundry Prompt Agent` (declarative config, Foundry runs
-the loop) or `Foundry Hosted Agent` (your own container or zip). It is **inert until you configure
-it**: a deploy with no Azure credentials calls nothing and reports the connector as not configured.
+FlowAMP uses exactly **one** foundation model: **`us.anthropic.claude-sonnet-5`**, a cross-region
+inference profile. Nothing in the stack can enable access to it - Bedrock model access is an
+account-level setting with no CloudFormation resource - so **you must enable it yourself before the
+agentic features work** (Console → Bedrock → Model access). Because the `us.` prefix denotes a
+cross-region inference profile, the entitlement is required for the underlying model in the profile's
+regions, not only the region you deploy into.
 
-This mirrors how FlowAMP's `aws-org` connector sweeps an AWS Organization, and it is simpler: there
-is no per-account role to assume, just one service principal whose Azure RBAC defines its reach.
+Three components invoke it, and each stops working entirely without access:
 
-1. **Register an application in Microsoft Entra ID.** Entra portal → **App registrations** → **New
-   registration**, then add a **client secret** under *Certificates & secrets*. FlowAMP authenticates
-   with the OAuth 2.0 client-credentials grant against
-   `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`. One app registration and one
-   secret cover both Azure planes; only the requested token scope differs -
-   `https://management.azure.com/.default` for the Azure Resource Manager enumeration
-   (subscriptions, Foundry accounts, projects) and `https://ai.azure.com/.default` for reading the
-   agents themselves. Keep the **tenant ID**, **client ID** and secret value.
-2. **Grant that application access to your Foundry resource.** Listing agents requires the data
-   action `Microsoft.CognitiveServices/accounts/AIServices/agents/read`. Verified against a live
-   tenant on 2026-09-09:
+| Component | What it uses the model for |
+|---|---|
+| **Management harness** | Answers natural-language questions over the registry. Backs `POST /chat`. |
+| **`discovery-scanner`** | Classifies and enriches discovered agents (`displayName`, `category`, `riskTier`, `capabilities`, `suggestedOwner`). |
+| **`compliance-scanner`** | LLM judgment layered on the deterministic compliance checks. |
 
-   - **`Foundry Agent Consumer` is not sufficient.** Despite being the documented least-privilege
-     agent role, it grants endpoint invocation and no data actions at all, so it cannot list agents.
-     `Foundry User` (role ID `53ca6127-db72-4b80-b1b0-d745d6d5456d`) is the narrowest built-in role
-     that works, because its `dataActions` are `Microsoft.CognitiveServices/*`.
-   - **Assign it at the Foundry resource (account) scope, or higher.** It inherits down to every
-     project in that account, so one assignment covers all of them. Azure portal → your Foundry
-     resource → **Access control (IAM)** → **Add role assignment** → `Foundry User` → your app
-     registration. If your estate spans several Foundry resources, assign at the resource group,
-     subscription or management group scope instead and it inherits from there.
+The three optional sample workload agents (`deploySampleAgents=true`) use the same model.
 
-   > **Allow up to ~30 minutes before concluding the assignment is wrong.** Data-plane authorization
-   > is cached, and `GET /agents` can keep returning **403** for tens of minutes after a correct
-   > assignment. In testing it stayed 403 across three attempts over roughly half an hour, then began
-   > working with no further change. This is the most likely thing to send you debugging a
-   > non-problem. If it is still failing well past that, check that the role reached the right
-   > identity: `--assignee` / **Members** must resolve to the **service principal's** object ID,
-   > which is a third value distinct from both the application (client) ID and the app registration's
-   > own object ID. Get it with `az ad sp show --id <client-id> --query id -o tsv`. The portal's IAM
-   > list displays the *application* ID under the name, so an assignment on the wrong principal still
-   > looks correct there.
+Both scanners are Strands agents whose every invocation runs through the model's tool-calling loop,
+so a missing entitlement is not a partial degradation of them - **native agent discovery and
+compliance auditing do not run at all**, and the registry stays empty of natively discovered agents.
 
-   For tighter privilege than `Foundry User` (which can also create, update and delete agents - more
-   than a governance plane should hold over the agents it audits), a custom role works and is the
-   better production answer. It needs `Microsoft.Authorization/roleDefinitions/write`, so an Azure
-   Owner has to create it:
+`cdk deploy` still succeeds without the entitlement, because access is only checked when a model is
+invoked. The failure appears later as `AccessDeniedException` in the agents' CloudWatch logs. These
+features are unaffected and need no model access:
 
-   ```json
-   {
-     "properties": {
-       "roleName": "FlowAMP Agent Discovery (read-only)",
-       "description": "Lists Foundry agents for governance discovery. No write access.",
-       "assignableScopes": ["/subscriptions/<subscription-id>"],
-       "permissions": [{
-         "actions": ["Microsoft.CognitiveServices/*/read"],
-         "notActions": [],
-         "dataActions": ["Microsoft.CognitiveServices/accounts/AIServices/agents/read"],
-         "notDataActions": []
-       }]
-     }
-   }
-   ```
-3. **There is no endpoint to paste.** FlowAMP reads each Foundry account's own data-plane endpoint
-   from its `properties.endpoints["AI Foundry API"]` value, then calls
-   `GET <endpoint>/agents?api-version=v1` per project, following the paging cursor and filtering by
-   agent `kind`. That is why the connector needs credentials only.
-4. **Configure it in the FlowAMP UI.** In the **Agent Registry** view's **Platform Integrations**
-   panel, open the Microsoft Foundry connector and enter the tenant ID, client ID and client secret,
-   then use **Test connection** to prove the credentials reach the tenant. The non-secret settings
-   are stored in `AgentTable`; the client secret goes only to AWS Secrets Manager under
-   `flowamp/connectors/microsoft` and is never returned by the API (reads report only *whether* a
-   credential is set). Discovered agents then refresh on the 6-hour sync and whenever you trigger a
-   sync by hand.
-
-What Foundry agents do **not** get, and where the connector's coverage stops, is covered under
-[production hardening](#production-hardening): no per-agent cost, no traffic metrics, no
-Responsible-AI score, no compliance audit, and a discovery reach bounded by the Azure role
-assignments you make outside FlowAMP.
+- the agent registry, manual registration, lifecycle and review workflow, and the whole UI;
+- the **Microsoft Foundry** connector and the connector configuration API (plain Lambdas over HTTPS);
+- cross-account **org discovery** (boto3 control-plane reads only);
+- the **FinOps** collector (Cost Explorer) and the **Responsible-AI scorer** (CloudWatch + CloudTrail).
 
 ## Evaluations: AgentCore-native agent scoring
 
@@ -343,88 +455,9 @@ Cost Explorer only groups by a user-defined tag once the key is **activated** in
    aws ce update-cost-allocation-tags-status --region us-east-1 \
      --cost-allocation-tags-status '[{"TagKey":"flowamp:agentId","Status":"Active"}]'
    ```
-3. Allow **~24-48 h** after activation (and real spend to accrue) before CE returns tag-grouped data.
+3. Allow **~24-48 h** after activation, and spend to accrue, before CE returns tag-grouped data.
    Until then the collector runs cleanly and writes nothing. This latency is normal AWS billing
    behavior, not a bug.
-
-## Prerequisites
-
-- **Node.js 20+** and npm; **[`uv`](https://docs.astral.sh/uv/)** (vendors the agents' arm64 deps).
-- **AWS credentials** for the target account. For **org discovery**, that account must be the
-  organization **management or a delegated-admin** account.
-- **Amazon Bedrock model access** for `us.anthropic.claude-sonnet-5` (Console → Bedrock → Model
-  access). See [Which model is used, and where](#which-model-is-used-and-where) for what stops
-  working without it. Because that is a **cross-region inference profile** (the `us.` prefix), the
-  entitlement is needed for the underlying model in the profile's regions, not only your deploy
-  region.
-- **Docker is not required.**
-
-### Which model is used, and where
-
-FlowAMP uses exactly **one** foundation model: **`us.anthropic.claude-sonnet-5`**, a cross-region
-inference profile. Nothing in the stack can enable access to it - Bedrock model access is an
-account-level setting with no CloudFormation resource - so **you must enable it yourself before the
-agentic features work** (Console → Bedrock → Model access). Because the `us.` prefix denotes a
-cross-region inference profile, the entitlement is required for the underlying model in the profile's
-regions, not only the region you deploy into.
-
-Three components invoke it, and each stops working entirely without access:
-
-| Component | What it uses the model for |
-|---|---|
-| **Management harness** | Answers natural-language questions over the registry. Backs `POST /chat`. |
-| **`discovery-scanner`** | Classifies and enriches discovered agents (`displayName`, `category`, `riskTier`, `capabilities`, `suggestedOwner`). |
-| **`compliance-scanner`** | LLM judgment layered on the deterministic compliance checks. |
-
-The three optional sample workload agents (`deploySampleAgents=true`) use the same model.
-
-Both scanners are Strands agents whose every invocation runs through the model's tool-calling loop,
-so a missing entitlement is not a partial degradation of them - **native agent discovery and
-compliance auditing do not run at all**, and the registry stays empty of natively discovered agents.
-
-`cdk deploy` still succeeds without the entitlement, because access is only checked when a model is
-invoked. The failure appears later as `AccessDeniedException` in the agents' CloudWatch logs. These
-features are unaffected and need no model access:
-
-- the agent registry, manual registration, lifecycle and review workflow, and the whole UI;
-- the **Microsoft Foundry** connector and the connector configuration API (plain Lambdas over HTTPS);
-- cross-account **org discovery** (boto3 control-plane reads only);
-- the **FinOps** collector (Cost Explorer) and the **Responsible-AI scorer** (CloudWatch + CloudTrail).
-
-## Deploy
-
-All commands run from [`cdk/`](cdk/). See [`cdk/README.md`](cdk/README.md) for details.
-
-```bash
-cd cdk
-npm install
-npx cdk bootstrap      # one-time per account/region
-npx cdk deploy
-```
-
-Stack outputs include `DemoUrl` (CloudFront UI), `ApiUrl`, `LoginUsername`/`LoginPassword` (seeded),
-`AgentTableName`, `ManagementHarnessArn`, `AgentManagementGatewayArn`, `UserPoolId`, and
-`DiscoveryScannerRuntimeArn` / `ComplianceScannerRuntimeArn`.
-
-### Optional add-ons
-
-```bash
-npx cdk deploy -c deploySampleAgents=true       # 3 sample agents (adds SampleAgentHarnessArns)
-npx cdk deploy -c seedSampleData=true           # demo catalog + simulated Okta/MuleSoft connectors
-npx cdk deploy -c enableOrgDiscovery=false      # turn OFF cross-account org discovery
-npx cdk deploy -c enableCostExplorer=false      # turn OFF the FinOps collector
-```
-
-**Sample agents in a separate account** (e.g. an org member account, to exercise cross-account
-discovery) can be deployed standalone - no platform, just the 3 runtimes:
-
-```bash
-npx cdk deploy --app "npx ts-node --prefer-ts-exts bin/sample-agents.ts" SampleAgentsStack --profile <that-account>
-```
-
-> **UI updates need a CloudFront invalidation.** The stack intentionally does not auto-invalidate
-> (avoids granting `cloudfront:CreateInvalidation` on `*`). After any deploy that changes the UI:
-> `aws cloudfront create-invalidation --distribution-id <id> --paths "/agent-management.html" "/"`.
 
 ## Production hardening
 
@@ -495,6 +528,16 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
   An agent with no attached guardrail produces no datapoints, so the scorer preserves its existing
   score rather than inventing one.
 
+## Tear down
+
+```bash
+cd cdk
+npx cdk destroy
+```
+
+Stateful resources use `RemovalPolicy.DESTROY`, so `destroy` removes everything - including the
+DynamoDB table and its data. (Change this before production; see [hardening](#production-hardening).)
+
 ## Repository layout
 
 ```
@@ -506,6 +549,7 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
 │   ├── lib/sample-agents-stack.ts# Standalone 3-sample-agent stack (for a separate account)
 │   ├── lib/sample-agents.ts      # The 3 sample harness definitions (shared by both stacks)
 │   ├── lib/agent-bundle.ts       # Synth-time uv vendoring of the scanner runtimes' arm64 deps
+│   ├── lib/index.ts              # Barrel export of the two stack classes
 │   └── README.md                 # Deploy details
 ├── assetsSrc/                    # Sources packaged as CDK assets
 │   ├── lambda/                   # agent-handler, api-handler, data-handler, discovery-handler,
@@ -520,7 +564,7 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
 │   └── site/                     # The static UI served via CloudFront
 ├── docs/developer-guides/        # Standalone HTML deep-dives per subsystem (NOT deployed)
 ├── docs/diagrams/                # Editable draw.io source for the architecture diagram
-└── static/images/                # Rendered architecture diagram (PNG)
+└── static/images/                # Rendered architecture diagram (PNG + SVG)
 ```
 
 ## Developer guides
@@ -536,16 +580,6 @@ They are **reference material for anyone who clones this repo**, and are intenti
 `open docs/developer-guides/finops-developer-guide.html`. See
 [`docs/developer-guides/README.md`](docs/developer-guides/README.md) for the index. If you
 change a subsystem, update its guide alongside the code.
-
-## Tear down
-
-```bash
-cd cdk
-npx cdk destroy
-```
-
-Stateful resources use `RemovalPolicy.DESTROY`, so `destroy` removes everything - including the
-DynamoDB table and its data. (Change this before production; see [hardening](#production-hardening).)
 
 ## Notes
 
