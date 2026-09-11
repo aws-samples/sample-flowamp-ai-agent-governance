@@ -48,7 +48,7 @@
 </div>
 
 <div class="card" style="border-color: var(--green);">
-  <strong>✅ Real now vs. 🟡 still-to-harden.</strong> Badges throughout this doc mark what is live: <span class="badge badge-prod">REAL</span> the compliance-scanner runtime, the deterministic checks, the audit row shapes, the triggers, the read APIs, and the Compliance UI. <span class="badge badge-demo">STUB</span> a handful of dependencies are safe no-ops in this single-table deployment: work-item lifecycle tools, Athena/curated-warehouse trend checks, and the escalation/AOP runtime. Compliance frameworks are <em>code-defined</em> — runtime editing is not supported.
+  <strong>✅ Real now vs. 🟡 still-to-harden.</strong> Badges throughout this doc mark what is live: <span class="badge badge-prod">IMPLEMENTED</span> the compliance-scanner runtime, the deterministic checks, the audit row shapes, the triggers, the read APIs, and the Compliance UI. <span class="badge badge-demo">STUB</span> a handful of dependencies are safe no-ops in this single-table deployment: work-item lifecycle tools, Athena/curated-warehouse trend checks, and the escalation/AOP runtime. Compliance frameworks are <em>code-defined</em> — runtime editing is not supported.
 </div>
 
 <h2>Architecture Overview</h2>
@@ -104,7 +104,7 @@
   <tr><td><span class="ic">INFO</span> (projection)</td><td><span class="ic">_update_agent_last_audited</span></td><td>Conditional <span class="ic">SET lastAuditedAt</span> on the agent's INFO row — never overwrites a newer timestamp.</td></tr>
 </table>
 
-<h3>The <span class="ic">AUDIT#</span> report shape <span class="badge badge-prod">REAL</span></h3>
+<h3>The <span class="ic">AUDIT#</span> report shape <span class="badge badge-prod">IMPLEMENTED</span></h3>
 
 <p>Every audit row carries a <span class="ic">report</span> object with exactly these keys (validated in <span class="ic">write_audit_report</span>). Floats are coerced to <span class="ic">Decimal</span> at the DynamoDB boundary:</p>
 
@@ -140,7 +140,7 @@
   }
 }</code></pre>
 
-<h3>RAI score row <span class="badge badge-prod">REAL</span></h3>
+<h3>RAI score row <span class="badge badge-prod">IMPLEMENTED</span></h3>
 <pre><code>{
   "agentId":   "grid-load-forecaster",
   "sk":        "RAI#2026-07-06T06:00:00Z",
@@ -157,7 +157,7 @@
 <h2>Triggers</h2>
 
 <div class="card">
-  <h3>Why a fire-and-forget invoker? <span class="badge badge-prod">REAL</span></h3>
+  <h3>Why a fire-and-forget invoker? <span class="badge badge-prod">IMPLEMENTED</span></h3>
   <p>The compliance-scanner is an AgentCore Runtime (invoke-only, no API of its own) and — being an LLM auditor running deterministic checks per agent — takes <em>minutes</em>. API Gateway's hard integration timeout is 29 s, so it cannot be invoked synchronously behind the API. The <span class="ic">compliance-scan-invoker</span> Lambda bridges the gap:</p>
   <ul>
     <li><strong>API path</strong> (<span class="ic">POST /compliance/scan</span>): reads an optional <span class="ic">{"agentId": "..."}</span> body, async re-invokes <em>itself</em> with <span class="ic">InvocationType='Event'</span>, and returns <span class="ic">HTTP 202 {"status":"started"}</span> immediately.</li>
@@ -165,10 +165,10 @@
     <li><strong>EventBridge schedule</strong> (daily): arrives as <span class="ic">{"source": "aws.events"}</span> → treated as a rotation run, same async path.</li>
   </ul>
 
-  <h3>Daily rotation (EventBridge, 04:00 UTC) <span class="badge badge-prod">REAL</span></h3>
+  <h3>Daily rotation (EventBridge, 04:00 UTC) <span class="badge badge-prod">IMPLEMENTED</span></h3>
   <p>The <span class="ic">ComplianceAuditSchedule</span> rule fires once a day and audits <strong>one agent per run</strong> — the eligible agent with the oldest <span class="ic">lastAuditedAt</span>. Selection (<span class="ic">_pick_rotation_target</span>) sorts eligible agents ascending by <span class="ic">lastAuditedAt</span>, treating absent/null as <span class="ic">""</span> so never-audited agents win first. <span class="ic">_eligible_for_audit</span> skips <span class="ic">FLOWAMP_</span> sentinel rows and <span class="ic">decommissioned</span>/<span class="ic">rejected</span> agents. Candidates can optionally be restricted to specific platforms by adding <span class="ic">FLOWAMP_PLATFORMS</span> rows flagged <span class="ic">auditable=true</span>; <strong>nothing writes those rows by default, and their absence means "audit everything eligible"</strong> — earlier versions treated an empty allowlist as "no candidates", which made every rotation run a silent no-op that still reported success. The cursor is pre-stamped <em>before</em> the LLM loop runs, so a flaky audit can never park the rotation on the same agent forever (ADR-22).</p>
 
-  <h3>On-demand <span class="badge badge-prod">REAL</span></h3>
+  <h3>On-demand <span class="badge badge-prod">IMPLEMENTED</span></h3>
   <p><span class="ic">POST /compliance/scan {"agentId": "..."}</span> audits one specific agent; <span class="ic">POST /compliance/scan {}</span> triggers a rotation pick. The UI's per-agent "Run audit" / "Re-audit" buttons send the agent id; the "Run rotation audit" button sends <span class="ic">{}</span>.</p>
 
 <pre><code>// cdk/lib/team-stack.ts — daily rotation schedule
@@ -298,14 +298,14 @@ finalize_audit(
 <h2>Read Paths &amp; the Compliance UI</h2>
 
 <div class="card">
-  <h3>Data-handler read APIs <span class="badge badge-prod">REAL</span></h3>
+  <h3>Data-handler read APIs <span class="badge badge-prod">IMPLEMENTED</span></h3>
   <ul>
     <li><span class="ic">GET /agents/{agentId}/audit?limit=N</span> → <span class="ic">get_agent_audits</span>: a single-partition Query on <span class="ic">AUDIT#</span> with <span class="ic">ScanIndexForward=False</span> (newest-first). Cheap, no scan.</li>
     <li><span class="ic">GET /audits</span> → <span class="ic">get_all_latest_audits</span>: one scan for <span class="ic">AUDIT#</span> rows, reduced to the newest row per <span class="ic">agentId</span> (the lexical <span class="ic">sk</span> max). Backs the fleet Compliance view.</li>
   </ul>
   <p>Both responses are projected to <span class="ic">_AUDIT_FIELDS = {'agentId', 'sk', 'rowType', 'createdAt', 'report'}</span> — anything not in that set (including internal keys) is dropped before it reaches the browser.</p>
 
-  <h3>UI surfaces <span class="badge badge-prod">REAL</span></h3>
+  <h3>UI surfaces <span class="badge badge-prod">IMPLEMENTED</span></h3>
   <p>In <span class="ic">agent-management.html</span> the compliance data drives two views:</p>
   <ul>
     <li><strong>Dedicated "Compliance" sidebar view</strong> (<span class="ic">loadComplianceFleet</span> / <span class="ic">renderComplianceFleet</span>): a fleet table with the composite A–F grade, composite score /100, per-framework badges, the top critical/high failed checks, and the last-audited date. A summary strip shows the grade distribution (graded / passing A–B / marginal C / failing D–F). "Run rotation audit" (<span class="ic">runFleetAudit</span> → <span class="ic">POST /compliance/scan {}</span>) and per-row "Re-audit" (<span class="ic">runComplianceAudit</span> → <span class="ic">POST /compliance/scan {agentId}</span>) trigger scans and poll the view until the new grade lands. Auto-refreshes every 60 s.</li>
@@ -359,11 +359,11 @@ new cdk.CfnOutput(this, "ComplianceScannerRuntimeArn", { value: complianceScanne
 <table>
   <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
   <tbody>
-    <tr><td><strong>compliance-scanner runtime</strong></td><td class="status-compliant">REAL</td><td>AgentCore Runtime, Strands agent on <span class="ic">us.anthropic.claude-sonnet-5</span>, deployed always.</td></tr>
-    <tr><td><strong>Deterministic checks (~23)</strong></td><td class="status-compliant">REAL</td><td>Live against Bedrock guardrails, IAM, CloudWatch, Config, S3, AgentTable. AccessDenied/unavailable → <span class="ic">skip</span>.</td></tr>
-    <tr><td><strong>5 frameworks + grading</strong></td><td class="status-compliant">REAL</td><td>baseline, nist-ai-rmf, iso-27001, soc-2, nerc-cip. A–F composite grades from the rubric.</td></tr>
-    <tr><td><strong>Triggers</strong></td><td class="status-compliant">REAL</td><td>Daily 04:00 UTC rotation + on-demand <span class="ic">POST /compliance/scan</span> via fire-and-forget invoker (202 + async self-invoke).</td></tr>
-    <tr><td><strong>Read APIs + UI</strong></td><td class="status-compliant">REAL</td><td><span class="ic">GET /agents/{id}/audit</span>, <span class="ic">GET /audits</span>; Compliance fleet view + per-agent Overview panel.</td></tr>
+    <tr><td><strong>compliance-scanner runtime</strong></td><td class="status-compliant">IMPLEMENTED</td><td>AgentCore Runtime, Strands agent on <span class="ic">us.anthropic.claude-sonnet-5</span>, deployed always.</td></tr>
+    <tr><td><strong>Deterministic checks (~23)</strong></td><td class="status-compliant">IMPLEMENTED</td><td>Live against Bedrock guardrails, IAM, CloudWatch, Config, S3, AgentTable. AccessDenied/unavailable → <span class="ic">skip</span>.</td></tr>
+    <tr><td><strong>5 frameworks + grading</strong></td><td class="status-compliant">IMPLEMENTED</td><td>baseline, nist-ai-rmf, iso-27001, soc-2, nerc-cip. A–F composite grades from the rubric.</td></tr>
+    <tr><td><strong>Triggers</strong></td><td class="status-compliant">IMPLEMENTED</td><td>Daily 04:00 UTC rotation + on-demand <span class="ic">POST /compliance/scan</span> via fire-and-forget invoker (202 + async self-invoke).</td></tr>
+    <tr><td><strong>Read APIs + UI</strong></td><td class="status-compliant">IMPLEMENTED</td><td><span class="ic">GET /agents/{id}/audit</span>, <span class="ic">GET /audits</span>; Compliance fleet view + per-agent Overview panel.</td></tr>
     <tr><td><strong>Athena / trend checks</strong></td><td class="status-warning">STUB</td><td>No curated warehouse; <span class="ic">query_athena</span> + moderate/expensive checks return no rows. Harden = stand up the invocation-log warehouse.</td></tr>
     <tr><td><strong>Work-item / escalation lifecycle</strong></td><td class="status-warning">STUB</td><td><span class="ic">create_work_item</span> + work-item tools are no-ops (no AOP/WorkItem runtime). <span class="ic">escalatedWorkItems</span> stays empty. Harden = wire an escalation backend.</td></tr>
     <tr><td><strong>Framework runtime editing</strong></td><td class="status-warning">CODE-DEFINED</td><td>Frameworks live in code (<span class="ic">flowamp_compliance_checks/frameworks/</span>). Editing at runtime is not supported; per-agent assignment via <span class="ic">COMPLIANCE#</span> rows is data-driven.</td></tr>

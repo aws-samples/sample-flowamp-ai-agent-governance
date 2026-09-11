@@ -1289,7 +1289,7 @@
             <div id="connectStatus" style="display:none;padding:12px;border-radius:8px;font-size:13px"></div>
             <div style="display:flex;gap:8px">
                 <button id="connectTestBtn" onclick="testPlatformConnection()" style="flex:1;background:none;border:1px solid #3a4e66;color:#58a6ff;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Test connection</button>
-                <button id="connectBtn" onclick="connectPlatform()" style="flex:1;background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Connect Platform</button>
+                <button id="connectBtn" onclick="connectPlatform()" style="flex:1;background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Save</button>
             </div>
         </div>
     </div></div>
@@ -3098,7 +3098,7 @@ async function connectPlatform(){
     if(btn){btn.disabled=true;btn.style.opacity='0.6';btn.textContent='Saving...';}
     setConnectStatus('info','Saving connector configuration...');
     const r=await apiSend('/discovery/connectors/'+encodeURIComponent(plat),'PUT',body);
-    if(btn){btn.disabled=false;btn.style.opacity='1';btn.textContent=original||'Connect Platform';}
+    if(btn){btn.disabled=false;btn.style.opacity='1';btn.textContent=original||'Save';}
     if(!r.ok){
         const msg=(r.data&&r.data.error)?r.data.error:('Save failed'+(r.status?' (HTTP '+r.status+')':''));
         setConnectStatus('error','✕ '+esc(msg));
@@ -3183,7 +3183,7 @@ function editPlatform(plat){
     const hdr=document.getElementById('connectTitle');
     if(hdr)hdr.textContent=(connectorConfigs[plat]?'Edit ':'Connect ')+connectorLabel(plat);
     const btn=document.getElementById('connectBtn');
-    if(btn){btn.textContent=connectorConfigs[plat]?'Save Changes':'Connect Platform';btn.style.background='#238636';btn.disabled=false;btn.style.opacity='1';}
+    if(btn){btn.textContent='Save';btn.style.background='#238636';btn.disabled=false;btn.style.opacity='1';}
     const tbtn=document.getElementById('connectTestBtn');
     if(tbtn){tbtn.textContent='Test connection';tbtn.disabled=false;tbtn.style.opacity='1';}
     document.getElementById('connectModal').style.display='block';
