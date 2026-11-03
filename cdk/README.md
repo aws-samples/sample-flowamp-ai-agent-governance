@@ -9,11 +9,11 @@ your own AWS account. It uses only public npm packages and the standard `cdk boo
 | Path | Purpose |
 |---|---|
 | `bin/cdk.ts` | App entrypoint - instantiates the `TeamStack` class as the CloudFormation stack **`FLOWAMP`**. |
-| `lib/team-stack.ts` | The full FlowAMP stack: DynamoDB, Lambdas, the management **harness** + **Gateway**, the two scanner **runtimes**, API Gateway, Cognito, S3 + CloudFront UI, plus the seed / discovery / rai-scorer / FinOps jobs. Extends the standard `cdk.Stack`. |
+| `lib/team-stack.ts` | The full FlowAMP stack: DynamoDB, Lambdas, the management **harness** + **Gateway**, the two scanner **runtimes**, API Gateway, Cognito, the S3 + CloudFront UI (optional, see `deployUi`), plus the seed / discovery / rai-scorer / FinOps jobs. Extends the standard `cdk.Stack`. |
 | `lib/agent-bundle.ts` | Assembles each scanner **runtime's** direct-code bundle at synth time: copies the agent source + shared packages and vendors arm64/cp312 pip deps with `uv` (no Docker). Harnesses need no bundle. |
 | `lib/sample-agents.ts` | The 3 sample workload **harness** definitions, shared by `TeamStack` and `SampleAgentsStack` so they cannot drift. |
 | `lib/sample-agents-stack.ts` + `bin/sample-agents.ts` | Standalone app that deploys ONLY the 3 sample harnesses, for a separate account. |
-| `cdk.json` | CDK app config. Context flags: `deploySampleAgents` (default off) adds 3 sample harnesses; `seedSampleData` (default off) adds the demo catalog + enables the still-simulated Okta/MuleSoft connectors, which write nothing without it (the real Microsoft Foundry connector is not gated by this flag; it stays inert until credentials are configured in the UI); `enableOrgDiscovery` (default **on**) cross-account discovery; `enableCostExplorer` (default **on**) real FinOps; `enableTransactionSearch` (default off) adds Gateway trace delivery — an **account-wide** change; `deployGovernanceAgents` (default **on**) the 2 scanner runtimes — `=false` **stops compliance auditing and drops the LLM enrichment half of discovery** (the `discovery-handler` Lambda takes native discovery back), and is the only way to drop the `uv` prerequisite. See the root README. |
+| `cdk.json` | CDK app config. Context flags: `deploySampleAgents` (default off) adds 3 sample harnesses; `seedSampleData` (default off) adds the demo catalog + enables the still-simulated Okta/MuleSoft connectors, which write nothing without it (the real Microsoft Foundry connector is not gated by this flag; it stays inert until credentials are configured in the UI); `enableOrgDiscovery` (default **on**) cross-account discovery; `enableCostExplorer` (default **on**) real FinOps; `enableTransactionSearch` (default off) adds Gateway trace delivery, an **account-wide** change; `deployGovernanceAgents` (default **on**) the 2 scanner runtimes; `=false` **stops compliance auditing and drops the LLM enrichment half of discovery** (the `discovery-handler` Lambda takes native discovery back), and is the only way to drop the `uv` prerequisite; `deployUi` (default **on**) the S3 + CloudFront UI, `=false` for an API-only deployment in an account where CloudFront is unavailable. See the root README. |
 | `../assetsSrc/` | Source inputs the stack packages as CDK assets — `lambda/` (handlers), `agents/` (the two scanner runtimes + `_shared/` packages; harnesses have no source here, they are config in CDK), `site/` (the UI HTML). Must sit alongside this `cdk/` directory. |
 
 ## Prerequisites
@@ -65,7 +65,8 @@ the stack:
 `cdk deploy` prints the stack outputs: `DemoUrl`, `ApiUrl`, `LoginUsername`, `LoginPassword`,
 `AgentTableName`, `ManagementHarnessArn`, `AgentManagementGatewayArn`, `UserPoolId`,
 `DiscoveryScannerRuntimeArn`, `ComplianceScannerRuntimeArn`
-(+ `SampleAgentHarnessArns` when `deploySampleAgents=true`).
+(+ `SampleAgentHarnessArns` when `deploySampleAgents=true`). With `-c deployUi=false` there is no
+`DemoUrl`; `ApiAllowedOrigin` and `UserPoolClientId` take its place.
 
 ### Redeploying a UI change
 
@@ -77,6 +78,39 @@ effect. Invalidate it yourself, using the distribution behind the `DemoUrl` outp
 ```bash
 aws cloudfront create-invalidation --distribution-id <id> \
   --paths "/agent-management.html" "/"
+```
+
+### Deploying without the UI (no CloudFront)
+
+```bash
+npx cdk deploy -c deployUi=false
+```
+
+Some accounts cannot create CloudFront resources at all. A service control policy that denies
+`cloudfront:CreateOriginAccessControl`, for example, fails the whole stack rather than just the UI.
+`-c deployUi=false` drops the site bucket, the distribution, the origin access control, the UI
+upload and the site-bucket drain, and leaves everything else exactly as it is: the API, Cognito,
+the agents, discovery, compliance and the scheduled jobs all still deploy and work.
+
+What changes:
+
+- **`DemoUrl` is not output.** `ApiUrl` is the entry point, and `ApiAllowedOrigin` plus
+  `UserPoolClientId` are output instead, which is what you need to configure a front end yourself.
+- **The API's CORS preflight allows any origin.** The distribution domain is the only origin the
+  stack can name, and without a distribution there is nothing to name, so it falls back to `*`
+  rather than guessing. CORS is not what protects this API: every data route carries the Cognito
+  authorizer, and the UI authenticates with a bearer token rather than a cookie, so a page on
+  another origin still has no credential to call with. If you host the UI at a known address,
+  scope the preflight to it in `lib/team-stack.ts`.
+
+To serve the UI yourself, copy `assetsSrc/site/agent-management.html` to your own host and add a
+`config.js` next to it with the values the stack normally generates:
+
+```js
+window.CHAT_API_URL = "<ApiUrl>chat";
+window.COGNITO = { userPoolId: "<UserPoolId>", clientId: "<UserPoolClientId>", region: "<region>" };
+window.DISCOVERY_SCAN_ENABLED = true;   // false with -c deployGovernanceAgents=false
+window.COMPLIANCE_SCAN_ENABLED = true;  // false with -c deployGovernanceAgents=false
 ```
 
 ### Core AgentCore agents (always deployed)

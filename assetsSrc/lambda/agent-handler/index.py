@@ -34,10 +34,31 @@ class DecimalEncoder(json.JSONEncoder):
         if isinstance(o, Decimal): return float(o)
         return super().default(o)
 
+def _scan_all(tbl, **kwargs) -> list:
+    """Every item a Scan matches, across ALL pages.
+
+    A Scan returns at most 1 MB per call, and AgentTable is single-table: INFO rows share it
+    with EVENT#, AUDIT#, REVIEW#, COST# and COMPLIANCE# rows, so it passes 1 MB within weeks.
+    A single-page Scan then silently returned a subset, so agents went missing from lists,
+    scoring and inactivation with no error anywhere. tests/test_pagination.py keeps every
+    Scan in this module routed through here.
+    """
+    items, start_key = [], None
+    while True:
+        page_kwargs = dict(kwargs)
+        if start_key:
+            page_kwargs['ExclusiveStartKey'] = start_key
+        resp = tbl.scan(**page_kwargs)
+        items.extend(resp.get('Items', []))
+        start_key = resp.get('LastEvaluatedKey')
+        if not start_key:
+            return items
+
+
 def scan_info():
     """All canonical entity rows (sk='INFO'). Excludes COST#/EVENT# rows."""
     from boto3.dynamodb.conditions import Attr
-    return table.scan(FilterExpression=Attr('sk').eq('INFO')).get('Items', [])
+    return _scan_all(table, FilterExpression=Attr('sk').eq('INFO'))
 
 def get_all_agents(platform=None):
     items = [i for i in scan_info() if not i['agentId'].startswith(PREFIXES)]

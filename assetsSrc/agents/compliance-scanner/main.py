@@ -86,7 +86,7 @@ from flowamp_tools import (
     log_agent_decision,
     list_active_agents as _list_active_agents,
 )
-from flowamp_tools.config import get_model_config
+from flowamp_tools.config import get_max_tokens, get_model_config
 from tools import (
     get_agent,
     list_applicable_frameworks,
@@ -228,14 +228,32 @@ def _pick_rotation_target() -> Optional[str]:
 
 _model_id = get_model_config()["complianceScannerModel"]
 
+# maxTokens must be set explicitly on EVERY BedrockModel built here. Strands has no
+# default of its own: BedrockModel filters unset inference values out of
+# `inferenceConfig`, so with no value `maxTokens` never reaches the Converse request at
+# all and Bedrock applies its own context-dependent default. Hitting that limit is fatal,
+# not degraded - Strands raises MaxTokensReachedException on stop_reason == 'max_tokens'
+# and deliberately re-raises instead of wrapping it, so a truncated turn kills the
+# entrypoint and the audit is lost. This auditor is the more exposed of the two scanners:
+# a narrative of up to 4000 chars plus per-framework recommendations is a long single
+# turn, which large fleets reach.
+#
+# Both branches of the guardrail if/else below must carry it. Patching only one leaves
+# the bug live for whichever BEDROCK_GUARDRAIL_ID setting takes the other branch.
+#
+# The value and the BEDROCK_MAX_TOKENS override come from flowamp_tools.config.get_max_tokens.
+# Resolved by the shared helper so both scanners read BEDROCK_MAX_TOKENS identically.
+_max_tokens = get_max_tokens(logger)
+
 if _guardrail_id:
     _model = BedrockModel(
         model_id=_model_id,
+        max_tokens=_max_tokens,
         guardrail_id=_guardrail_id,
         guardrail_version=_guardrail_version,
     )
 else:
-    _model = BedrockModel(model_id=_model_id)
+    _model = BedrockModel(model_id=_model_id, max_tokens=_max_tokens)
 
 _AUDIT_TOOLS = [
     # Read-only discovery tools

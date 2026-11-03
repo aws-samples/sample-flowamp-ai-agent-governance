@@ -22,6 +22,7 @@ import os
 import uuid
 
 import boto3
+from botocore.config import Config
 
 RUNTIME_ARN = os.environ.get("COMPLIANCE_SCANNER_ARN", "")
 SELF_FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
@@ -51,7 +52,16 @@ def _run_audit(agent_id: str) -> str:
     finds no target is not an error, but it must not be reported as a completed
     audit either — that reads as a clean run and hides the misconfiguration.
     """
-    client = boto3.client("bedrock-agentcore", region_name=_region)
+    # Same reasoning as discovery-scan-invoker: botocore's default 60s read timeout is
+    # shorter than an audit, so a healthy run would raise ReadTimeoutError and be reported
+    # as failed. read_timeout bounds a silent stall, not the whole call; the function's 600s
+    # timeout (team-stack.ts, Lambda retries off) bounds the rest. No SDK retries: a retried
+    # InvokeAgentRuntime is a second audit, not a recovery.
+    client = boto3.client(
+        "bedrock-agentcore", region_name=_region,
+        config=Config(read_timeout=570, connect_timeout=10,
+                      retries={"total_max_attempts": 1, "mode": "standard"}),
+    )
     session_id = "ui-compliance-" + uuid.uuid4().hex + uuid.uuid4().hex  # >= 33 chars
     payload = {"agentId": agent_id} if agent_id else {}
     resp = client.invoke_agent_runtime(

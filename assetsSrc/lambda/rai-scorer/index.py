@@ -318,6 +318,27 @@ def get_rmf_compliance_score():
     return 1.0
 
 
+def _scan_all(tbl, **kwargs) -> list:
+    """Every item a Scan matches, across ALL pages.
+
+    A Scan returns at most 1 MB per call, and AgentTable is single-table: INFO rows share it
+    with EVENT#, AUDIT#, REVIEW#, COST# and COMPLIANCE# rows, so it passes 1 MB within weeks.
+    A single-page Scan then silently returned a subset, so agents went missing from lists,
+    scoring and inactivation with no error anywhere. tests/test_pagination.py keeps every
+    Scan in this module routed through here.
+    """
+    items, start_key = [], None
+    while True:
+        page_kwargs = dict(kwargs)
+        if start_key:
+            page_kwargs['ExclusiveStartKey'] = start_key
+        resp = tbl.scan(**page_kwargs)
+        items.extend(resp.get('Items', []))
+        start_key = resp.get('LastEvaluatedKey')
+        if not start_key:
+            return items
+
+
 def run_scoring():
     """Compute and persist RAI scores for all registered agents.
 
@@ -327,7 +348,7 @@ def run_scoring():
     # Agent records only: entity rows (sk='INFO'), excluding the compliance:/aop:/access: prefixes
     # and any COST#/EVENT# rows.
     from boto3.dynamodb.conditions import Attr
-    all_items = table.scan(FilterExpression=Attr('sk').eq('INFO')).get('Items', [])
+    all_items = _scan_all(table, FilterExpression=Attr('sk').eq('INFO'))
     agents = [i for i in all_items
               if not i['agentId'].startswith(('compliance:', 'aop:', 'access:'))]
 

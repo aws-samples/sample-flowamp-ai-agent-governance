@@ -58,6 +58,9 @@ Stack outputs include `DemoUrl` (CloudFront UI), `ApiUrl`, `LoginUsername`/`Logi
 `AgentTableName`, `ManagementHarnessArn`, `AgentManagementGatewayArn`, `UserPoolId`, and
 `DiscoveryScannerRuntimeArn` / `ComplianceScannerRuntimeArn`.
 
+If your account cannot create CloudFront resources, deploy the control plane on its own with
+`-c deployUi=false` and host the UI yourself ([`deployUi`](#configuration-flags)).
+
 ## What deploys by default
 
 A bare `npx cdk deploy` is **live-only, no seed data**. It deploys:
@@ -107,6 +110,7 @@ npx cdk deploy -c deploySampleAgents=true       # 3 sample agents (adds SampleAg
 npx cdk deploy -c seedSampleData=true           # demo catalog + simulated Okta/MuleSoft connectors
 npx cdk deploy -c enableOrgDiscovery=false      # turn OFF cross-account org discovery
 npx cdk deploy -c enableCostExplorer=false      # turn OFF the FinOps collector
+npx cdk deploy -c deployUi=false                # API only, no S3/CloudFront UI
 ```
 
 **Sample agents in a separate account** (e.g. an org member account, to exercise cross-account
@@ -120,12 +124,13 @@ Full reference:
 
 | Flag | Default | Effect |
 |---|---|---|
-| `enableOrgDiscovery` | **`true`** | Cross-account org discovery: `organizations:ListAccounts` → assume a role per member account → list Bedrock Agents + AgentCore runtimes per region. **Requires FlowAMP to run in the org management or a delegated-admin account** (otherwise it returns nothing and surfaces a UI warning). Assumed role defaults to `AWSControlTowerExecution` - override with `-c orgDiscoveryRoleName=…`; regions with `-c orgDiscoveryRegions=us-east-1,us-west-2` (defaults to the stack region). |
+| `enableOrgDiscovery` | **`true`** | Cross-account org discovery: `organizations:ListAccounts` → assume a role per member account → list Bedrock Agents + AgentCore runtimes per region. **Requires FlowAMP to run in the org management or a delegated-admin account** (otherwise it returns nothing and surfaces a UI warning). Assumed role defaults to `AWSControlTowerExecution` - override with `-c orgDiscoveryRoleName=…`; regions with `-c orgDiscoveryRegions=us-east-1,us-west-2` (defaults to the stack region). **The default only works from the management account.** `AWSControlTowerExecution` (and `OrganizationAccountAccessRole`) trust the management account alone, so from a **delegated-admin** account you must roll out your own role that trusts the FlowAMP account and pass its name - see [Org discovery role](#org-discovery-role). |
 | `enableCostExplorer` | **`true`** | Deploys `finops-collector` + the cost-allocation-tag activator. Real spend appears only after the `flowamp:agentId` tag is activated in Billing and CE backfills (~24-48h) - see [FinOps](#finops-real-cost-from-cost-explorer). |
 | `deploySampleAgents` | `false` | Deploy 3 sample workload agents as real, discoverable AgentCore harnesses. |
 | `seedSampleData` | `false` | Load a demo agent catalog (`source: demo-seed`) and enable the **still-simulated** Okta / MuleSoft connectors, plus the simulated org fallback, for a populated UI without real agents. **Off by default so the catalog only ever contains agents that actually exist in your account** - those connectors return hardcoded illustrative data, not API results. The **Microsoft Foundry** connector is *not* gated by this flag: it makes real API calls and stays inert until you give it credentials ([setup](#connect-microsoft-foundry)). |
 | `enableTransactionSearch` | `false` | Adds distributed **traces** for the Gateway's tool calls, on top of the request/response logs that are delivered either way. Off by default because enabling it is an **account-wide** change that moves span ingestion onto CloudWatch pricing (1% of spans indexed free) - see [Enable Transaction Search](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html). Safe to re-run where it is already on, and never disabled on stack delete. |
 | `deployGovernanceAgents` | **`true`** | The `discovery-scanner` + `compliance-scanner` runtimes. Setting `=false` **disables the features they provide, not just their provisioning**: compliance auditing stops and discovery loses its agentic half (see below). It is the only way to drop the `uv` prerequisite, since these are the only components needing a code bundle. |
+| `deployUi` | **`true`** | The S3 + CloudFront web UI. Setting `=false` deploys the control plane without a front end, for an account where CloudFront is unavailable - a service control policy denying `cloudfront:CreateOriginAccessControl`, for instance, fails the whole stack and not just the UI. Everything else is unchanged; see below. |
 
 > **Turning off `deployGovernanceAgents` removes capability, not just cost.** With
 > `-c deployGovernanceAgents=false`:
@@ -146,6 +151,23 @@ Full reference:
 > audit controls, rather than calling routes that
 > do not exist. Deploy without the flag (or `=true`) to get the full platform.
 
+> **Turning off `deployUi` removes the front end, nothing else.** With `-c deployUi=false` the
+> site bucket, the distribution, the origin access control, the UI upload and the site-bucket drain
+> are all skipped. The API, Cognito, the three core agents, discovery, compliance, FinOps and every
+> scheduled job deploy and behave exactly as they do with the UI on. Two differences to plan for:
+>
+> - **`DemoUrl` is not output.** `ApiUrl` is the entry point, and `ApiAllowedOrigin` plus
+>   `UserPoolClientId` are output in its place, which is what a front end you host yourself needs.
+> - **The API's CORS preflight allows any origin.** The distribution domain is the only origin the
+>   stack can name, so with no distribution it falls back to `*` rather than guessing at yours. CORS
+>   is not the protection on this API: every data route carries the Cognito authorizer and the UI
+>   authenticates with a bearer token rather than a cookie, so a page on another origin has no
+>   credential to call with. Scope the preflight to your own origin in `cdk/lib/team-stack.ts` once
+>   you know it.
+>
+> [`cdk/README.md`](cdk/README.md) has the `config.js` to put next to
+> `assetsSrc/site/agent-management.html` if you serve the UI yourself.
+
 > **Packaging - `uv` required.** The two scanner *runtimes* deploy on every `cdk deploy`, so
 > [`uv`](https://docs.astral.sh/uv/) must be on the machine that runs synth/deploy. They use
 > AgentCore **direct code deployment** (Lambda-style shared responsibility: AWS provides the Python
@@ -160,6 +182,67 @@ Full reference:
 > [250 MB compressed / 750 MB uncompressed](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html),
 > neither adjustable, and the uncompressed limit is the one that binds in practice (the current
 > bundles sit near 170 MB unzipped, mostly ADOT and the Strands tool extras).
+
+## Org discovery role
+
+Cross-account discovery assumes one role, by name, in every other account in the organization.
+**FlowAMP does not create that role.** CDK only provisions the calling side: the discovery
+Lambda gets `sts:AssumeRole` on `arn:aws:iam::*:role/<orgDiscoveryRoleName>`, and the name is
+passed through as an environment variable. The role itself must already exist in each member
+account you want scanned, or that account is skipped and named in the connector's warning list.
+
+Which role you can use depends on where FlowAMP runs:
+
+| FlowAMP runs in | Role to use | Pre-work |
+|---|---|---|
+| Organization **management** account | `AWSControlTowerExecution` (default), or `OrganizationAccountAccessRole` | None, if Control Tower provisioned it. Both already trust the management account. |
+| **Delegated-admin** account | Your own role, any name | Required. Neither built-in role trusts a delegated admin, so you must roll one out. |
+
+Two things make the delegated-admin case different. First, `organizations:ListAccounts` has to be
+callable from that account, which needs an Organizations resource-based delegation policy; without
+it the connector reports "Cannot enumerate the organization" and stops before assuming anything.
+Second, the built-in roles are provisioned trusting `arn:aws:iam::<management-account>:root` only,
+so an assume from a delegated admin fails with `AccessDenied` even though the role name exists.
+
+The role needs three read-only actions, and nothing else:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "bedrock:ListAgents",
+      "bedrock-agentcore:ListHarnesses",
+      "bedrock-agentcore:ListAgentRuntimes"
+    ],
+    "Resource": "*"
+  }]
+}
+```
+
+Trust it to the account FlowAMP is deployed in:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::<flowamp-account-id>:root" },
+    "Action": "sts:AssumeRole"
+  }]
+}
+```
+
+Roll it out to every member account with a service-managed CloudFormation StackSet so new
+accounts inherit it on enrollment, then deploy with the matching name:
+
+```bash
+npx cdk deploy -c orgDiscoveryRoleName=FlowAMPOrgDiscoveryRole
+```
+
+Scope the trust further for production: add an `sts:ExternalId` condition, or narrow the principal
+from `:root` to the discovery Lambda's execution role ARN once the stack exists.
 
 ## Connect Microsoft Foundry
 
@@ -283,7 +366,7 @@ Agents are deployed two ways, and the distinction matters when adding your own:
 | **Lambda `seed-data`** | CFN custom resource that seeds a demo catalog. Gated off by default (`seedSampleData`). |
 | **Lambda `cognito-seed-user`** | Seeds the single demo UI user (`flowadmin`) - replace for production (see hardening). |
 | **API Gateway** REST (Cognito-authorized) | `POST /chat`; data routes `/agents` (+`{id}` PATCH, `/lifecycle`, `/audit`, `/evaluations`), `/compliance`, `/aops`, `/access`, `/events`, `/costs`, `/audits`, `/evaluations` (+`/readiness`); `POST /rai/score`; `POST /compliance/scan`; `POST /evaluations/enable`, `POST /evaluations/disable`; `POST /discovery/sync`, `POST /discovery/scan`, `GET /discovery/status`, `GET /discovery/platforms`; connector config `GET /discovery/connectors`, `PUT`/`DELETE /discovery/connectors/{platform}`, `POST /discovery/connectors/{platform}/test`. |
-| **S3 + CloudFront** | Hosts the static UI (`assetsSrc/site/agent-management.html`). |
+| **S3 + CloudFront** | Hosts the static UI (`assetsSrc/site/agent-management.html`). Skipped by `-c deployUi=false`, which leaves an API-only deployment. |
 
 ## Agentic discovery
 
@@ -470,9 +553,13 @@ This deploys real infrastructure, but the defaults are demo-grade. Before produc
   Replace with your corporate IdP / SSO federation and remove the seeded user.
 - **Edge protection:** no WAF is attached to CloudFront or API Gateway - add AWS WAF for a
   public-facing deployment.
-- **Org discovery least privilege:** the default assumed role is `AWSControlTowerExecution` (broad).
-  Roll out a scoped, read-only discovery role to member accounts (e.g. via a service-managed
-  StackSet) and set `-c orgDiscoveryRoleName=…`.
+- **Org discovery least privilege:** the default assumed role is `AWSControlTowerExecution`, which
+  Control Tower provisions with `AdministratorAccess`. On the default path FlowAMP's discovery
+  Lambda therefore holds admin in every member account in order to make three read-only list
+  calls. The stack does scope its own `sts:AssumeRole` grant to that one role *name*
+  (`arn:aws:iam::*:role/<orgDiscoveryRoleName>`) rather than `*`, so it cannot assume arbitrary
+  roles. Roll out a scoped, read-only discovery role instead and set
+  `-c orgDiscoveryRoleName=…` - see [Org discovery role](#org-discovery-role).
 - **The Okta and MuleSoft connectors are still simulated, and therefore disabled by default:** they
   return illustrative data (capped, tagged `source: external-connector`), not API results, and run
   only under `-c seedSampleData=true`, so a normal deploy never puts an agent you do not own into the

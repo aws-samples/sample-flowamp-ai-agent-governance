@@ -204,20 +204,31 @@ class AopCoverage(Check):
 
         dynamodb = ctx.client("dynamodb")
         try:
-            resp = dynamodb.scan(
-                TableName=table_name,
-                FilterExpression="assignedAgent = :name",
-                ExpressionAttributeValues={":name": {"S": target.agent_id}},
-                ProjectionExpression="aopId",
-            )
-            items = resp.get("Items", [])
+            # Every page, not just the first: a Scan filters AFTER reading up to 1 MB, so the
+            # first page can be empty while a later one holds the reference, and stopping
+            # there reported the agent as having no AOP coverage.
+            items, start_key = [], None
+            while True:
+                kwargs = dict(
+                    TableName=table_name,
+                    FilterExpression="assignedAgent = :name",
+                    ExpressionAttributeValues={":name": {"S": target.agent_id}},
+                    ProjectionExpression="aopId",
+                )
+                if start_key:
+                    kwargs["ExclusiveStartKey"] = start_key
+                resp = dynamodb.scan(**kwargs)
+                items.extend(resp.get("Items", []))
+                start_key = resp.get("LastEvaluatedKey")
+                if not start_key:
+                    break
             if not items:
                 return CheckResult(
                     result="fail",
                     evidence=f"No AOP references agent {target.agent_id}",
                 )
             aop_ids = ", ".join(item["aopId"]["S"] for item in items[:5])
-            count = resp.get("Count", len(items))
+            count = len(items)
             return CheckResult(
                 result="pass",
                 evidence=f"{count} AOP(s) reference agent: {aop_ids}",

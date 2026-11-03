@@ -217,6 +217,23 @@
         .fin-chargeback-row:hover { background: #2a3d52; }
         .fin-kpi-counter { animation: finCountUp 0.3s ease-out; }
         @keyframes spin { to { transform: rotate(360deg); } }
+        /* Inline button spinner. A discovery run takes 60-90s and the two POSTs that start
+           it take a few seconds on their own, so the button needs to show it is working
+           from the moment of the click rather than after the requests return. */
+        .btn-spin { display:inline-block; width:11px; height:11px; vertical-align:-1px;
+            border:2px solid rgba(255,255,255,0.35); border-top-color:#fff; border-radius:50%;
+            animation: spin 0.7s linear infinite; }
+        .btn-busy { opacity: 0.75; cursor: wait !important; }
+        /* Registry pager. 45+ agents in one list is unreadable, so the table pages. */
+        .pager-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+            padding:10px 2px 2px; font-size:12px; color:#9aacbe; }
+        .pager-btn { background:none; border:1px solid #2e4058; color:#d0d8e2; padding:4px 10px;
+            border-radius:6px; font-size:12px; cursor:pointer; transition:all 0.15s; }
+        .pager-btn:hover:not(:disabled) { border-color:#58a6ff; color:#58a6ff; }
+        .pager-btn:disabled { opacity:0.4; cursor:default; }
+        .pager-btn.active { background:rgba(88,166,255,0.12); border-color:#58a6ff; color:#58a6ff; font-weight:600; }
+        .pager-select { background:#243448; border:1px solid #2e4058; color:#d0d8e2;
+            padding:4px 8px; border-radius:6px; font-size:12px; cursor:pointer; }
         .topo-node { cursor: pointer; transition: transform 0.2s; }
         .topo-node:hover { transform: scale(1.1); }
         .topo-label { font-size: 10px; fill: #8b8f96; text-anchor: middle; pointer-events: none; }
@@ -731,11 +748,11 @@
                     <div class="section-header"><h2 class="section-title">Platform Integrations</h2></div>
                     <div id="regIntegrations" style="display:flex;flex-direction:column;gap:8px"></div>
                     <button onclick="openConnectPlatform()" style="margin-top:12px;background:none;border:1px dashed #3a4e66;color:#58a6ff;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;width:100%">+ Configure Connector</button>
-                    <button onclick="syncDiscovery()" style="margin-top:8px;background:none;border:1px solid #3a4e66;color:#58a6ff;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;width:100%">Sync now</button>
+                    <button onclick="syncDiscovery()" data-discovery-btn style="margin-top:8px;background:none;border:1px solid #3a4e66;color:#58a6ff;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;width:100%">Sync now</button>
                 </div>
             </div>
             <div class="catalog-section">
-                <div class="section-header"><h2 class="section-title">Agent Lifecycle</h2><span class="agent-count" id="regLifecycleCount">0 agents</span><button onclick="syncDiscovery()" style="margin-left:auto;background:#1f6feb;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">⟳ Discover agents</button></div>
+                <div class="section-header"><h2 class="section-title">Agent Lifecycle</h2><span class="agent-count" id="regLifecycleCount">0 agents</span><button onclick="syncDiscovery()" data-discovery-btn style="margin-left:auto;background:#1f6feb;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">⟳ Discover agents</button></div>
                 <input type="text" id="regSearch" class="search-bar" style="margin-bottom:12px" placeholder="🔍 Filter agents by name, category, system, or owner..." oninput="searchRegistry(this.value)">
                 <div class="filter-bar" id="regFilterBar">
                     <button class="filter-btn active" onclick="filterRegistry('all',this)">All</button>
@@ -748,6 +765,7 @@
                 <div class="finops-wrap"><table class="finops-table"><thead><tr>
                     <th>Agent</th><th>Category</th><th>Platform</th><th>Account</th><th>Status</th><th>Runtime</th><th>Registered</th><th>Owner</th><th>Actions</th>
                 </tr></thead><tbody id="regTable"></tbody></table></div>
+                <div class="pager-bar" id="regPagerBar"></div>
             </div>
         </div>        <div id="liveMetrics" class="tab-content" style="display:none;">
             <div class="catalog-section">
@@ -1690,6 +1708,13 @@ function filterScores(level, el) {
     renderAIScores(aiScoresData.filter(a => level==='all'||!raiNotScored(a)&&(level==='high'&&a.score>=95||level==='mid'&&a.score>=92&&a.score<95||level==='low'&&a.score<92)));
 }
 function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// A value as a JS string literal for an inline handler: onclick="fn(${jsStr(v)})".
+// esc() alone is NOT safe there: the browser HTML-decodes the attribute before running it,
+// so `&#39;` turns back into `'` and a name like x');alert(1);// closes the literal.
+// JSON.stringify builds the literal (escaping quotes, backslashes and newlines) and esc()
+// then makes it attribute-safe, so after the decode the handler gets exactly the original.
+function jsStr(v) { return esc(JSON.stringify(String(v ?? '')));
+}
 
 // ── Responsible AI "not scored" ───────────────────────────────────────────────
 // The scorer can only grade agents whose prompts, guardrails and traces it can read on
@@ -1739,13 +1764,13 @@ function renderAIScores(data) {
         // A not-scored agent gets no score colour and no sub-score bars: there are none to
         // draw, and empty bars would read as zeros.
         if(raiNotScored(a))
-            return `<div class="agent-item" onclick="showAgentDetail('${esc(a.name)}')" style="padding:10px 14px"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4;margin-bottom:4px">${esc(a.name)}</div><div style="font-size:11px;color:#7a8a9c">${esc(raiReason(a))}</div></div><div style="min-width:36px;text-align:right">${raiNotScoredHtml(a,'13px')}</div></div>`;
+            return `<div class="agent-item" onclick="showAgentDetail(${jsStr(a.name)})" style="padding:10px 14px"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4;margin-bottom:4px">${esc(a.name)}</div><div style="font-size:11px;color:#7a8a9c">${esc(raiReason(a))}</div></div><div style="min-width:36px;text-align:right">${raiNotScoredHtml(a,'13px')}</div></div>`;
         const sc=a.score>=95?'#3fb950':a.score>=92?'#58a6ff':'#d29922';
         const bars=[{l:'F',v:a.fairness},{l:'T',v:a.transparency},{l:'A',v:a.accountability},{l:'E',v:a.ethics}].map(d=>{
             const c=d.v>=95?'#3fb950':d.v>=92?'#58a6ff':'#d29922';
             return `<div style="flex:1;display:flex;align-items:center;gap:3px;font-size:10px"><span style="color:#7a8a9c;width:10px">${d.l}</span><div style="flex:1;height:3px;background:#2e4058;border-radius:2px;overflow:hidden"><div style="height:100%;width:${d.v}%;background:${c};border-radius:2px"></div></div></div>`;
         }).join('');
-        return `<div class="agent-item" onclick="showAgentDetail('${esc(a.name)}')" style="padding:10px 14px"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4;margin-bottom:4px">${esc(a.name)}</div><div style="display:flex;gap:6px">${bars}</div></div><div style="font-size:20px;font-weight:800;color:${sc};min-width:36px;text-align:right">${a.score}</div></div>`;
+        return `<div class="agent-item" onclick="showAgentDetail(${jsStr(a.name)})" style="padding:10px 14px"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:#edf0f4;margin-bottom:4px">${esc(a.name)}</div><div style="display:flex;gap:6px">${bars}</div></div><div style="font-size:20px;font-weight:800;color:${sc};min-width:36px;text-align:right">${a.score}</div></div>`;
     };
     // Top 5. Headers are suppressed when nothing in view is scored.
     if(sorted.length){
@@ -1793,7 +1818,7 @@ function showAgentDetail(name) {
 
     let activeTab = 'Overview';
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-    document.getElementById('dpTabs').innerHTML = tabs.map(t => `<div class="detail-tab${t===activeTab?' active':''}" onclick="switchDetailTab('${esc(name)}','${t.split(' ')[0]}',this)">${t}</div>`).join('');
+    document.getElementById('dpTabs').innerHTML = tabs.map(t => `<div class="detail-tab${t===activeTab?' active':''}" onclick="switchDetailTab(${jsStr(name)},${jsStr(t.split(' ')[0])},this)">${t}</div>`).join('');
 
     // Opening a different agent must not inherit the previous one's open Owner editor.
     editingOwner = false;
@@ -1967,13 +1992,13 @@ function renderComplianceFleet() {
             : '<span style="color:#3fb950;font-size:12px">None</span>';
         const when = (r.sk || '').replace('AUDIT#', '').slice(0, 10) || '—';
         return `<tr>
-            <td style="font-weight:500;cursor:pointer" onclick="showAgentDetail('${esc(name)}')">${esc(name)}</td>
+            <td style="font-weight:500;cursor:pointer" onclick="showAgentDetail(${jsStr(name)})">${esc(name)}</td>
             <td><span style="font-size:20px;font-weight:800;color:${_gradeColor(grade)}">${esc(grade)}</span></td>
             <td style="font-family:monospace;color:#dee4ea">${score != null ? score + '/100' : '—'}</td>
             <td>${fwBadges}</td>
             <td>${findingsHtml}</td>
             <td style="font-size:12px;color:#9aacbe">${esc(when)}</td>
-            <td style="text-align:right"><button onclick="runComplianceAudit('${esc(name)}')" style="background:#243448;color:#dae0e8;border:1px solid #2e4058;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer">⟳ Re-audit</button></td>
+            <td style="text-align:right"><button onclick="runComplianceAudit(${jsStr(name)})" style="background:#243448;color:#dae0e8;border:1px solid #2e4058;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer">⟳ Re-audit</button></td>
         </tr>`;
     }).join('');
 }
@@ -2374,7 +2399,7 @@ function renderDetailTab(name, tab) {
         // Compliance audit (AUDIT# rows from the compliance-scanner). loadAgentAudit()
         // fills the body after render, since it needs a GET /agents/{id}/audit call.
         h += `<div class="detail-section"><div class="detail-section-title">Compliance Audit
-                <button onclick="runComplianceAudit('${esc(name)}')" style="float:right;background:#1f6feb;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">⟳ Run audit</button></div>
+                <button onclick="runComplianceAudit(${jsStr(name)})" style="float:right;background:#1f6feb;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">⟳ Run audit</button></div>
               <div id="auditPanelBody"><div style="color:#9aacbe;font-size:13px">Loading latest audit…</div></div></div>`;
         // FinOps
         if (fin) {
@@ -2393,7 +2418,7 @@ function renderDetailTab(name, tab) {
         if (relatedAops.length) {
             h += '<div class="detail-section"><div class="detail-section-title">Related AOP</div>';
             relatedAops.forEach(a => {
-                h += `<div class="detail-aop-link" onclick="closeDetailPanel();showTab('aops',document.querySelector('[onclick*=\\'aops\\']'));setTimeout(()=>toggleAop('${a.id}'),100)"><div><div style="font-weight:600;font-size:13px">${esc(a.name)}</div><div style="font-size:13px;color:#dae0e8">${a.id} · ${a.status} · ${a.executions.toLocaleString()} executions</div></div><span style="color:#58a6ff">→</span></div>`;
+                h += `<div class="detail-aop-link" onclick="closeDetailPanel();showTab('aops',document.querySelector('[onclick*=\\'aops\\']'));setTimeout(()=>toggleAop(${jsStr(a.id)}),100)"><div><div style="font-weight:600;font-size:13px">${esc(a.name)}</div><div style="font-size:13px;color:#dae0e8">${esc(a.id)} · ${esc(a.status)} · ${a.executions.toLocaleString()} executions</div></div><span style="color:#58a6ff">→</span></div>`;
             });
             h += '</div>';
         }
@@ -2401,11 +2426,11 @@ function renderDetailTab(name, tab) {
         relatedAops.forEach(a => {
             const ed = entryDetails[a.id]||{};
             h += `<div class="aop-card"><div class="aop-header"><span style="font-weight:600">${esc(a.name)}</span><span class="aop-badge aop-badge-${a.status}">${a.status}</span></div>`;
-            h += `<div class="aop-meta">${a.id} · Owner: ${a.owner}</div>`;
+            h += `<div class="aop-meta">${esc(a.id)} · Owner: ${esc(a.owner)}</div>`;
             h += `<div style="background:#223044;border:1px solid #2e4058;border-radius:8px;padding:10px 14px;margin:10px 0;font-size:13px"><span style="color:#3fb950;font-weight:600;font-size:12px;text-transform:uppercase">Entry Condition</span><br>${a.entry}</div>`;
             // Workflow nodes
             a.nodes.forEach((n,i) => {
-                h += `<div class="aop-node aop-node-${n.type}"><div class="aop-node-icon">${nodeIcons[n.type]}</div><div class="aop-node-content"><div class="aop-node-label" style="color:${nodeColors[n.type]}">${n.label} · ${n.type}</div><div class="aop-node-text">${n.text}</div>${n.tools?`<div class="aop-node-tools">${n.tools.map(t=>`<span class="aop-node-tool">${t}</span>`).join('')}</div>`:''}</div></div>`;
+                h += `<div class="aop-node aop-node-${esc(n.type)}"><div class="aop-node-icon">${nodeIcons[n.type]}</div><div class="aop-node-content"><div class="aop-node-label" style="color:${nodeColors[n.type]}">${esc(n.label)} · ${esc(n.type)}</div><div class="aop-node-text">${esc(n.text)}</div>${n.tools?`<div class="aop-node-tools">${n.tools.map(t=>`<span class="aop-node-tool">${esc(t)}</span>`).join('')}</div>`:''}</div></div>`;
                 if (i < a.nodes.length-1) h += '<div class="aop-connector"></div>';
             });
             h += `<div class="aop-stats"><div class="aop-stat">Executions: <span>${a.executions.toLocaleString()}</span></div>${a.successRate?`<div class="aop-stat">Success: <span style="color:${a.successRate>=95?'#00d084':'#ff8c00'}">${a.successRate}%</span></div>`:''}<div class="aop-stat">Last: <span>${a.lastRun}</span></div></div></div>`;
@@ -2435,7 +2460,7 @@ function renderDetailTab(name, tab) {
                 h += '<div class="detail-section"><div class="detail-section-title">Users with Access</div>';
                 accessRoles.forEach(r => {
                     const perm = accessPerms[r.role]?.[catIdx];
-                    if (perm && perm !== 'none') h += `<div class="detail-row"><span>${r.name} <span style="color:#dae0e8;font-size:13px">(${r.role})</span></span><span class="perm perm-${perm}">${permLabel[perm]}</span></div>`;
+                    if (perm && perm !== 'none') h += `<div class="detail-row"><span>${esc(r.name)} <span style="color:#dae0e8;font-size:13px">(${r.role})</span></span><span class="perm perm-${perm}">${permLabel[perm]}</span></div>`;
                 });
                 h += '</div>';
             }
@@ -2493,11 +2518,11 @@ function populateComplianceScores() {
         const bg = i.status==='compliant'?'rgba(63,185,80,0.06)':'rgba(210,153,34,0.06)';
         const statusLabel = i.status==='compliant'?'✓ Compliant':'⚠ Review';
         const ring = `<svg width="52" height="52" viewBox="0 0 52 52" style="flex-shrink:0"><circle cx="26" cy="26" r="22" fill="none" stroke="#2e4058" stroke-width="4"/><circle cx="26" cy="26" r="22" fill="none" stroke="${sc}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${i.score*1.38} 200" transform="rotate(-90 26 26)" style="transition:stroke-dasharray .6s"/><text x="26" y="30" text-anchor="middle" fill="${sc}" font-size="13" font-weight="800">${i.score}</text></svg>`;
-        return `<div class="compliance-card" onclick="showComplianceModal('${i.name}')" style="background:${bg};display:flex;align-items:center;gap:14px;padding:14px 16px">
+        return `<div class="compliance-card" onclick="showComplianceModal(${jsStr(i.name)})" style="background:${bg};display:flex;align-items:center;gap:14px;padding:14px 16px">
             ${ring}
             <div style="flex:1;min-width:0">
-                <div style="font-size:14px;font-weight:700;color:#edf0f4;margin-bottom:3px">${i.name}</div>
-                <div style="font-size:11px;color:#8b95a1;margin-bottom:6px">Audited ${i.lastAudit}</div>
+                <div style="font-size:14px;font-weight:700;color:#edf0f4;margin-bottom:3px">${esc(i.name)}</div>
+                <div style="font-size:11px;color:#8b95a1;margin-bottom:6px">Audited ${esc(i.lastAudit)}</div>
                 <div style="font-size:11px;font-weight:600;color:${sc}">${statusLabel}</div>
             </div>
         </div>`;
@@ -2517,7 +2542,7 @@ function populateAgentCategories(filter) {
             flatHtml += matched.map(a => {
                 const ai = aiScoresData.find(s=>s.name===a.name);
                 const fin = finopsData.find(f=>f.name===a.name);
-                return `<div class="agent-item" onclick="showAgentDetail('${esc(a.name)}')" style="margin-bottom:4px">
+                return `<div class="agent-item" onclick="showAgentDetail(${jsStr(a.name)})" style="margin-bottom:4px">
                     <div class="agent-info"><div class="agent-name">${esc(a.name)}</div><div class="agent-details">${esc(a.category)}${ai?(raiNotScored(ai)?' · Not scored':' · Score: '+ai.score):''}${fin?' · $'+fin.cost+'/mo':''}</div></div>
                     <span style="color:#e2e8ee;font-size:12px">View →</span></div>`;
             }).join('');
@@ -2527,7 +2552,7 @@ function populateAgentCategories(filter) {
     const catHtml = agentCategories.filter(c => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || (categoryAgents[c.name]||[]).some(a=>a.toLowerCase().includes(q))).map(c => {
         const agents = categoryAgents[c.name]||[], isExp = expandedCategory===c.name;
         const matched = q ? agents.filter(a=>a.toLowerCase().includes(q)||c.name.toLowerCase().includes(q)||c.description.toLowerCase().includes(q)) : agents;
-        return `<div><div class="category-item" onclick="toggleCategory('${esc(c.name)}')"><div class="category-info"><div class="category-icon" style="background:${c.color}">${iconMap[c.name]}</div><div class="category-details"><h3>${esc(c.name)}</h3><p>${esc(c.description)}</p></div></div><div class="category-count" style="background:${c.color};color:#000">${c.count} agents ${isExp?'▲':'▼'}</div></div><div class="category-agents ${isExp?'expanded':''}">${matched.map(a=>`<div class="category-agent-item" onclick="event.stopPropagation();showAgentDetail('${esc(a)}')"><span>${esc(a)}</span><span style="color:#e2e8ee;font-size:12px">View →</span></div>`).join('')}</div></div>`;
+        return `<div><div class="category-item" onclick="toggleCategory(${jsStr(c.name)})"><div class="category-info"><div class="category-icon" style="background:${c.color}">${iconMap[c.name]}</div><div class="category-details"><h3>${esc(c.name)}</h3><p>${esc(c.description)}</p></div></div><div class="category-count" style="background:${c.color};color:#000">${c.count} agents ${isExp?'▲':'▼'}</div></div><div class="category-agents ${isExp?'expanded':''}">${matched.map(a=>`<div class="category-agent-item" onclick="event.stopPropagation();showAgentDetail(${jsStr(a)})"><span>${esc(a)}</span><span style="color:#e2e8ee;font-size:12px">View →</span></div>`).join('')}</div></div>`;
     }).join('');
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('agentCategories').innerHTML = flatHtml + catHtml;
@@ -2558,6 +2583,18 @@ const platformIntegrations = [
     // 'connected' tile here would claim FlowAMP is governing the customer's agents on
     // that platform. Nothing here writes a catalog row; see CONNECTORS in the discovery
     // handler for what is real.
+    //
+    // AWS Agent Registry is the nearest-term of these and deliberately carries
+    // no `platform` key yet, so it paints as a tile and nothing more: no Discover button, no
+    // click-through, no connector record. Wiring it means a CONNECTORS entry in the discovery
+    // handler reading the `agent-registry` data plane - ListDiscoverableRegistryRecords /
+    // SearchDiscoverableRegistryRecords / BatchGetDiscoverableRegistryRecord against a
+    // registry ARN. Worth doing before more of the cross-account AWS path is hand-rolled:
+    // Registry's own org-wide auto-detection covers AgentCore Runtimes and Gateways from a
+    // delegated admin account with nothing installed in member accounts, which is what
+    // orgDiscoveryRoleName exists to do here. It does NOT cover non-AWS platforms, so the
+    // Foundry sweep and the Classic pass stay ours either way.
+    {name:'AWS Agent Registry', icon:'AR', status:'available', agents:0, lastSync:'—'},
     {name:'Databricks', icon:'DB', status:'available', agents:0, lastSync:'—'},
     {name:'GCP Vertex AI', icon:'GV', status:'available', agents:0, lastSync:'—'},
     {name:'Anthropic', icon:'AN', status:'available', agents:0, lastSync:'—'},
@@ -2568,6 +2605,9 @@ const platformIntegrations = [
 ];
 let regFilter='all';
 let regSearch='';
+const REG_PAGE_SIZES=[20,50,100];
+let regPageSize=REG_PAGE_SIZES[0];
+let regPage=1;
 // Populate the Register-New-Agent dropdowns from configured values so the form is not free
 // text: Source System = the connected integrations plus the native AWS options, Owner = the
 // business units that own the agent classes.
@@ -2716,6 +2756,14 @@ function renderRegistry(){
     else if(regFilter==='drift') filtered=filtered.filter(a=>!!driftOf(a));
     if(regSearch){const q=regSearch.toLowerCase();filtered=filtered.filter(a=>[a.name,a.category,a.system,a.owner].some(v=>(v||'').toLowerCase().includes(q)));}
     document.getElementById('regLifecycleCount').textContent=filtered.length+' agents';
+    // Page the filtered rows. Clamp first: a filter or search can shrink the result below
+    // the current page, which would otherwise render an empty table with no way back.
+    const totalPages=Math.max(1,Math.ceil(filtered.length/regPageSize));
+    if(regPage>totalPages) regPage=totalPages;
+    if(regPage<1) regPage=1;
+    const pageStart=(regPage-1)*regPageSize;
+    const pageRows=filtered.slice(pageStart,pageStart+regPageSize);
+    renderRegistryPager(filtered.length,totalPages,pageStart,pageRows.length);
     // Keep the nav badge and Registered metric in sync with the catalog size (total
     // agents, not the filtered view).
     const totalAgents=registryData.length;
@@ -2783,13 +2831,45 @@ function renderRegistry(){
         return badge(a.status)+flag+platformLine(a);
     };
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-    document.getElementById('regTable').innerHTML=filtered.map((a,i)=>{
+    document.getElementById('regTable').innerHTML=pageRows.length?pageRows.map((a,i)=>{
         const actions=lifecycleButtons(a);
         // Every cell is esc()-encoded: category/system/runtime/owner can carry values
         // originating outside AWS, so none of them is trusted markup.
-        return `<tr style="cursor:pointer;animation:finFadeUp 0.3s ease-out ${i*0.03}s both" onclick="showAgentDetail('${esc(a.name)}')"><td style="font-weight:500">${esc(a.name)}</td><td style="color:#dee4ea">${esc(a.category)}</td><td style="color:#9aacbe">${esc(a.system)}</td><td style="font-size:12px;color:#9aacbe;white-space:nowrap">${accountCell(a)}</td><td>${statusCell(a)}</td><td style="font-size:12px;color:#9aacbe">${esc(a.runtime)}</td><td style="font-size:12px;color:#9aacbe">${esc(a.registered)}</td><td style="font-size:12px;color:#9aacbe">${ownerCell(a)}</td><td onclick="event.stopPropagation()">${actions}</td></tr>`;
-    }).join('');
+        return `<tr style="cursor:pointer;animation:finFadeUp 0.3s ease-out ${i*0.03}s both" onclick="showAgentDetail(${jsStr(a.name)})"><td style="font-weight:500">${esc(a.name)}</td><td style="color:#dee4ea">${esc(a.category)}</td><td style="color:#9aacbe">${esc(a.system)}</td><td style="font-size:12px;color:#9aacbe;white-space:nowrap">${accountCell(a)}</td><td>${statusCell(a)}</td><td style="font-size:12px;color:#9aacbe">${esc(a.runtime)}</td><td style="font-size:12px;color:#9aacbe">${esc(a.registered)}</td><td style="font-size:12px;color:#9aacbe">${ownerCell(a)}</td><td onclick="event.stopPropagation()">${actions}</td></tr>`;
+    }).join(''):'<tr><td colspan="9" style="text-align:center;padding:28px;color:#9aacbe">No agents match this filter.</td></tr>';
     populateRegisterOptions();
+}
+// Pager for the lifecycle table: page-size selector, prev/next, and a windowed set of
+// page numbers. Hidden entirely when everything fits on one page, so a small fleet keeps
+// an uncluttered table.
+function renderRegistryPager(total,totalPages,pageStart,shown){
+    const bar=document.getElementById('regPagerBar');
+    if(!bar)return;
+    if(total<=Math.min(...REG_PAGE_SIZES)){bar.innerHTML='';bar.style.display='none';return;}
+    bar.style.display='flex';
+    const sizeSel=`<label style="display:flex;align-items:center;gap:6px">Rows per page
+        <select class="pager-select" onchange="setRegPageSize(this.value)">${
+            REG_PAGE_SIZES.map(n=>`<option value="${n}"${n===regPageSize?' selected':''}>${n}</option>`).join('')
+        }</select></label>`;
+    const range=total?`${pageStart+1}–${pageStart+shown} of ${total}`:'0 of 0';
+    // Window the page numbers so 100s of agents cannot produce a runaway row of buttons.
+    const win=[];
+    const from=Math.max(1,Math.min(regPage-2,totalPages-4)), to=Math.min(totalPages,Math.max(regPage+2,5));
+    for(let p=from;p<=to;p++)win.push(p);
+    const numBtns=win.map(p=>`<button class="pager-btn${p===regPage?' active':''}" onclick="setRegPage(${p})">${p}</button>`).join('');
+    bar.innerHTML=`${sizeSel}<span style="margin-left:auto">${range}</span>
+        <button class="pager-btn" onclick="setRegPage(${regPage-1})"${regPage<=1?' disabled':''}>‹ Prev</button>
+        ${from>1?'<span style="color:#5a6b7e">…</span>':''}${numBtns}${to<totalPages?'<span style="color:#5a6b7e">…</span>':''}
+        <button class="pager-btn" onclick="setRegPage(${regPage+1})"${regPage>=totalPages?' disabled':''}>Next ›</button>`;
+}
+function setRegPage(p){regPage=Math.max(1,p);renderRegistry();}
+// Changing page size keeps the first row of the current view in sight rather than
+// jumping back to page 1, which is disorienting deep into a long fleet.
+function setRegPageSize(n){
+    const first=(regPage-1)*regPageSize;
+    regPageSize=parseInt(n,10)||REG_PAGE_SIZES[0];
+    regPage=Math.floor(first/regPageSize)+1;
+    renderRegistry();
 }
 // Render lifecycle action buttons for a registry row, mirroring the backend
 // AGENT_LIFECYCLE_TRANSITIONS state machine so the UI offers exactly the
@@ -2797,7 +2877,7 @@ function renderRegistry(){
 function lifecycleButtons(a){
     const id=a.agentId||'', nm=esc(a.name);
     if(!id) return `<span style="font-size:12px;color:#9aacbe">${esc(a.reason||'—')}</span>`;
-    const btn=(state,label,color)=>`<button class="edit-btn" onclick="event.stopPropagation();lifecycleAction('${id}','${state}','${nm}')" style="color:${color};border-color:${color}44;margin-left:6px">${label}</button>`;
+    const btn=(state,label,color)=>`<button class="edit-btn" onclick="event.stopPropagation();lifecycleAction(${jsStr(id)},${jsStr(state)},${jsStr(a.name)})" style="color:${color};border-color:${color}44;margin-left:6px">${label}</button>`;
     const T={
         'pending-review':[['active','Approve','#3fb950'],['rejected','Reject','#f85149']],
         'pending':[['active','Approve','#3fb950'],['rejected','Reject','#f85149']],
@@ -2810,8 +2890,10 @@ function lifecycleButtons(a){
     if(!opts.length) return `<span style="font-size:12px;color:#9aacbe">${esc(a.reason||'—')}</span>`;
     return opts.map(o=>btn(o[0],o[1],o[2])).join('');
 }
-function filterRegistry(f,btn){regFilter=f;document.querySelectorAll('#regFilterBar .filter-btn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');renderRegistry();}
-function searchRegistry(q){regSearch=q||'';renderRegistry();}
+// Changing the filter or the search resets to page 1: the result set is different, so
+// staying on page 4 would show an arbitrary slice of unrelated rows.
+function filterRegistry(f,btn){regFilter=f;regPage=1;document.querySelectorAll('#regFilterBar .filter-btn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');renderRegistry();}
+function searchRegistry(q){regSearch=q||'';regPage=1;renderRegistry();}
 async function registerAgent(){
     const name=document.getElementById('regName').value.trim();
     if(!name){alert('Agent name is required');return;}
@@ -3001,7 +3083,11 @@ function _connDetailRows(details){
     return rows;
 }
 // lastSyncStatus -> colour, using the same palette as the registry status badges.
-const _CONN_SYNC_COLORS={ok:'#3fb950',partial:'#d29922',error:'#f85149',skipped:'#9aacbe'};
+// `running` is written by the discovery-scan invoker before it hands off to the scanner
+// runtime, so a scan in flight paints blue rather than falling through to the grey that also
+// means "no sync recorded". Every literal any writer can emit needs a key here, or a real
+// status is indistinguishable from never having synced.
+const _CONN_SYNC_COLORS={ok:'#3fb950',running:'#58a6ff',partial:'#d29922',error:'#f85149',skipped:'#9aacbe'};
 // Open the shared slide-over on one connector's last sync, so an operator can see what the
 // connector saw (org ID, accounts scanned, Foundry projects swept) and not only whether it
 // errored. Reuses #detailPanel because its Escape handler, overlay close and .detail-*
@@ -3347,21 +3433,21 @@ function renderFinOps() {
             anomalies.push({severity:'high',icon:'🔴',title:`Daily spend spike on ${dateLabels[dateLabels.length-1]}`,desc:`$${Math.round(last)}/day vs $${Math.round(avg7)} trailing-7-day average.`,agent:'Service Health Monitor'});
         }
     }
-    finopsData.filter(a=>a.cost>700&&a.trend==='up').forEach(a=>anomalies.push({severity:'high',icon:'🔴',title:`${a.name} — cost spike`,desc:`$${a.cost}/mo and rising.`,agent:a.name}));
-    finopsData.filter(a=>a.utilization<55).forEach(a=>anomalies.push({severity:'medium',icon:'🟡',title:`${a.name} — idle compute`,desc:`Only ${a.utilization}% utilization at $${a.cost}/mo.`,agent:a.name}));
+    finopsData.filter(a=>a.cost>700&&a.trend==='up').forEach(a=>anomalies.push({severity:'high',icon:'🔴',title:`${a.name} — cost spike`,desc:`$${a.cost}/mo and rising.`,agent:a.name})); // plain text: esc() is applied where this is rendered
+    finopsData.filter(a=>a.utilization<55).forEach(a=>anomalies.push({severity:'medium',icon:'🟡',title:`${a.name} — idle compute`,desc:`Only ${a.utilization}% utilization at $${a.cost}/mo.`,agent:a.name})); // plain text: esc() is applied where this is rendered
     document.getElementById('finAnomalyCount').textContent=anomalies.length+' detected';
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-    document.getElementById('finAnomalies').innerHTML=anomalies.length===0?'<div style="text-align:center;padding:20px;color:#3fb950;font-size:13px">✓ No anomalies detected</div>':anomalies.slice(0,5).map((a,i)=>`<div class="fin-animate-in" style="animation-delay:${i*0.08}s;padding:12px 16px;background:#243448;border:1px solid ${a.severity==='high'?'#f8514933':'#d2992233'};border-radius:8px;border-left:3px solid ${a.severity==='high'?'#f85149':'#d29922'};cursor:pointer" onclick="showAgentDetail('${esc(a.agent)}')"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;font-weight:600;color:#edf0f4">${a.icon} ${esc(a.title)}</span><span style="font-size:12px;color:${a.severity==='high'?'#f85149':'#d29922'};text-transform:uppercase;font-weight:700">${a.severity}</span></div><div style="font-size:12px;color:#9aacbe">${a.desc}</div></div>`).join('');
+    document.getElementById('finAnomalies').innerHTML=anomalies.length===0?'<div style="text-align:center;padding:20px;color:#3fb950;font-size:13px">✓ No anomalies detected</div>':anomalies.slice(0,5).map((a,i)=>`<div class="fin-animate-in" style="animation-delay:${i*0.08}s;padding:12px 16px;background:#243448;border:1px solid ${a.severity==='high'?'#f8514933':'#d2992233'};border-radius:8px;border-left:3px solid ${a.severity==='high'?'#f85149':'#d29922'};cursor:pointer" onclick="showAgentDetail(${jsStr(a.agent)})"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:13px;font-weight:600;color:#edf0f4">${a.icon} ${esc(a.title)}</span><span style="font-size:12px;color:${a.severity==='high'?'#f85149':'#d29922'};text-transform:uppercase;font-weight:700">${a.severity}</span></div><div style="font-size:12px;color:#9aacbe">${a.desc}</div></div>`).join('');
     // Recommendations
     const recs=[];
-    finopsData.filter(a=>a.utilization<60).forEach(a=>recs.push({icon:'⚠️',text:`Right-size <b>${a.name}</b> (${a.utilization}% util)`,savings:Math.round(a.cost*0.3),priority:'High',agent:a.name}));
-    finopsData.filter(a=>a.costPerInvocation>0.001).forEach(a=>recs.push({icon:'💡',text:`Optimize <b>${a.name}</b> model — add caching`,savings:Math.round(a.cost*0.2),priority:'Medium',agent:a.name}));
+    finopsData.filter(a=>a.utilization<60).forEach(a=>recs.push({icon:'⚠️',text:`Right-size <b>${esc(a.name)}</b> (${a.utilization}% util)`,savings:Math.round(a.cost*0.3),priority:'High',agent:a.name}));
+    finopsData.filter(a=>a.costPerInvocation>0.001).forEach(a=>recs.push({icon:'💡',text:`Optimize <b>${esc(a.name)}</b> model — add caching`,savings:Math.round(a.cost*0.2),priority:'Medium',agent:a.name}));
     const totalSavings=recs.reduce((s,r)=>s+r.savings,0);
     document.getElementById('finRecCount').textContent=recs.length+' actions · $'+totalSavings.toLocaleString()+'/mo potential savings';
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('finRecommendations').innerHTML=recs.slice(0,8).map((r,i)=>{
         const pColor={'High':'#f85149','Medium':'#d29922','Low':'#58a6ff'}[r.priority];
-        return `<div class="fin-animate-in" style="animation-delay:${i*0.06}s;display:flex;align-items:center;gap:12px;padding:12px 16px;background:#243448;border:1px solid #2e4058;border-radius:8px;font-size:13px;cursor:pointer" onclick="showAgentDetail('${esc(r.agent)}')"><span style="font-size:16px">${r.icon}</span><span style="flex:1;color:#dee4ea">${esc(r.text)}</span><span style="color:${pColor};font-weight:700;font-size:12px;padding:2px 8px;border:1px solid ${pColor}44;border-radius:10px">${r.priority}</span><span style="color:#3fb950;font-weight:600;font-size:12px">~$${r.savings}/mo</span></div>`;
+        return `<div class="fin-animate-in" style="animation-delay:${i*0.06}s;display:flex;align-items:center;gap:12px;padding:12px 16px;background:#243448;border:1px solid #2e4058;border-radius:8px;font-size:13px;cursor:pointer" onclick="showAgentDetail(${jsStr(r.agent)})"><span style="font-size:16px">${r.icon}</span><span style="flex:1;color:#dee4ea">${esc(r.text)}</span><span style="color:${pColor};font-weight:700;font-size:12px;padding:2px 8px;border:1px solid ${pColor}44;border-radius:10px">${r.priority}</span><span style="color:#3fb950;font-weight:600;font-size:12px">~$${r.savings}/mo</span></div>`;
     }).join('');
     // Agent table
     let sorted=[...finopsData];
@@ -3378,7 +3464,7 @@ function renderFinOps() {
         const effColor={'A':'#3fb950','B':'#58a6ff','C':'#d29922','D':'#f85149'}[eff];
         const trendColor=a.trend==='up'?'#f85149':a.trend==='down'?'#3fb950':'#9aacbe';
         const utilColor=a.utilization>=80?'#3fb950':a.utilization>=60?'#d29922':'#f85149';
-        return `<tr style="cursor:pointer;animation:finFadeUp 0.3s ease-out ${i*0.03}s both" onclick="showAgentDetail('${esc(a.name)}')">
+        return `<tr style="cursor:pointer;animation:finFadeUp 0.3s ease-out ${i*0.03}s both" onclick="showAgentDetail(${jsStr(a.name)})">
             <td style="font-weight:500">${esc(a.name)}</td>
             <td style="font-weight:700;font-family:monospace">$${a.cost.toLocaleString()}</td>
             <td style="width:120px"><div style="width:100%;background:#243448;border-radius:3px;height:16px;overflow:hidden"><div class="fin-bar-animate" style="width:${pct}%;height:100%;background:linear-gradient(90deg,#1f6feb,#58a6ff);border-radius:3px;animation-delay:${0.3+i*0.03}s"></div></div></td>
@@ -3398,7 +3484,7 @@ function animateFinCounter(id,target){const el=document.getElementById(id);if(!e
 function showFinTip(evt,value,date,idx){const tip=document.getElementById('finTrendTooltip');if(!tip)return;const rect=evt.target.closest('svg').getBoundingClientRect();tip.innerHTML=`<div style="font-weight:700;margin-bottom:2px">$${value}/day</div><div style="color:#9aacbe">${date}</div>`;tip.style.left=(evt.clientX-rect.left+12)+'px';tip.style.top=(evt.clientY-rect.top-60)+'px';tip.classList.add('visible');}
 function hideFinTip(){const tip=document.getElementById('finTrendTooltip');if(tip)tip.classList.remove('visible');}
 // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-function drillDonut(cat){const panel=document.getElementById('finDonutDrill');if(!panel)return;if(panel.classList.contains('open')&&panel.dataset.cat===cat){panel.classList.remove('open');return;}panel.dataset.cat=cat;const agents=finopsData.filter(a=>(categoryAgents[cat]||[]).includes(a.name)).sort((a,b)=>b.cost-a.cost);const catTotal=agents.reduce((s,a)=>s+a.cost,0);const color=(agentCategories.find(c=>c.name===cat)||{color:'#58a6ff'}).color;panel.innerHTML=`<div style="font-size:13px;font-weight:700;color:#edf0f4;margin-bottom:8px;display:flex;align-items:center;gap:8px"><div style="width:10px;height:10px;border-radius:2px;background:${color}"></div>${cat} — $${catTotal.toLocaleString()}/mo<span style="margin-left:auto;cursor:pointer;color:#9aacbe;font-size:16px" onclick="document.getElementById('finDonutDrill').classList.remove('open')">✕</span></div>`+agents.map((a,i)=>`<div class="fin-animate-in" style="animation-delay:${i*0.05}s;display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #2e4058;font-size:12px;cursor:pointer" onclick="showAgentDetail('${esc(a.name)}')"><span style="color:#dee4ea;flex:1">${esc(a.name)}</span><span style="font-family:monospace;font-weight:600;color:#edf0f4">$${a.cost}</span></div>`).join('');panel.classList.add('open');}
+function drillDonut(cat){const panel=document.getElementById('finDonutDrill');if(!panel)return;if(panel.classList.contains('open')&&panel.dataset.cat===cat){panel.classList.remove('open');return;}panel.dataset.cat=cat;const agents=finopsData.filter(a=>(categoryAgents[cat]||[]).includes(a.name)).sort((a,b)=>b.cost-a.cost);const catTotal=agents.reduce((s,a)=>s+a.cost,0);const color=(agentCategories.find(c=>c.name===cat)||{color:'#58a6ff'}).color;panel.innerHTML=`<div style="font-size:13px;font-weight:700;color:#edf0f4;margin-bottom:8px;display:flex;align-items:center;gap:8px"><div style="width:10px;height:10px;border-radius:2px;background:${color}"></div>${cat} — $${catTotal.toLocaleString()}/mo<span style="margin-left:auto;cursor:pointer;color:#9aacbe;font-size:16px" onclick="document.getElementById('finDonutDrill').classList.remove('open')">✕</span></div>`+agents.map((a,i)=>`<div class="fin-animate-in" style="animation-delay:${i*0.05}s;display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #2e4058;font-size:12px;cursor:pointer" onclick="showAgentDetail(${jsStr(a.name)})"><span style="color:#dee4ea;flex:1">${esc(a.name)}</span><span style="font-family:monospace;font-weight:600;color:#edf0f4">$${a.cost}</span></div>`).join('');panel.classList.add('open');}
 function setFinPeriod(p,btn){document.querySelectorAll('.section-header .filter-btn').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');renderFinOps();}
 function exportFinOps(){const csv='Agent,Monthly Cost,Utilization,Cost/Invocation,Trend\n'+finopsData.map(a=>`${a.name},${a.cost},${a.utilization}%,$${a.costPerInvocation.toFixed(4)},${a.trend}`).join('\n');const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='finops-export.csv';a.click();}
 let finopsFilter='all';
@@ -3482,7 +3568,7 @@ function renderAgentAccess(cat) {
     const editBtn = `<button class="edit-btn" onclick="toggleAccessEdit('agents')">${editingAgentAccess?'Cancel':'✏️ Edit'}</button>`;
     const saveBtn = editingAgentAccess ? `<button class="edit-btn edit-btn-save" onclick="saveAccessEdit('agents')" style="margin-left:6px">💾 Save</button>` : '';
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
-    document.getElementById('agentAccessTable').innerHTML = `<thead><tr><th>Agent</th><th>Category</th>${agentSystems.map(s=>`<th>${esc(s)}</th>`).join('')}<th style="text-align:right">${editBtn}${saveBtn}</th></tr></thead><tbody>${list.map(a=>`<tr style="cursor:pointer"><td style="font-weight:500" onclick="showAgentDetail('${esc(a.name)}')">${esc(a.name)}</td><td style="color:#e2e8ee;font-size:12px">${esc(a.category)}</td>${agentSysKeys.map(k=>editingAgentAccess?`<td><select class="perm-select" data-agent="${esc(a.name)}" data-key="${k}">${['full','read','exec','audit','none'].map(o=>`<option value="${o}"${o===a[k]?' selected':''}>${permLabel[o]}</option>`).join('')}</select></td>`:`<td><span class="perm perm-${a[k]}">${permLabel[a[k]]}</span></td>`).join('')}<td></td></tr>`).join('')}</tbody>`;
+    document.getElementById('agentAccessTable').innerHTML = `<thead><tr><th>Agent</th><th>Category</th>${agentSystems.map(s=>`<th>${esc(s)}</th>`).join('')}<th style="text-align:right">${editBtn}${saveBtn}</th></tr></thead><tbody>${list.map(a=>`<tr style="cursor:pointer"><td style="font-weight:500" onclick="showAgentDetail(${jsStr(a.name)})">${esc(a.name)}</td><td style="color:#e2e8ee;font-size:12px">${esc(a.category)}</td>${agentSysKeys.map(k=>editingAgentAccess?`<td><select class="perm-select" data-agent="${esc(a.name)}" data-key="${k}">${['full','read','exec','audit','none'].map(o=>`<option value="${o}"${o===a[k]?' selected':''}>${permLabel[o]}</option>`).join('')}</select></td>`:`<td><span class="perm perm-${a[k]}">${permLabel[a[k]]}</span></td>`).join('')}<td></td></tr>`).join('')}</tbody>`;
 }
 function filterAgentAccess(cat, el) {
     document.querySelectorAll('#agentAccessFilterBar .filter-btn').forEach(b=>b.classList.remove('active'));
@@ -3529,27 +3615,27 @@ function renderAops(filter) {
                     <div class="aop-node-icon">${nodeIcons[n.type]}</div>
                     <div class="aop-node-content">
                         <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-                            <select class="node-type-select" data-aop="${a.id}" data-node="${i}" data-field="type" onchange="previewNodeType(this)">
+                            <select class="node-type-select" data-aop="${esc(a.id)}" data-node="${i}" data-field="type" onchange="previewNodeType(this)">
                                 ${['action','decision','output'].map(t=>`<option value="${t}"${t===n.type?' selected':''}>${t.charAt(0).toUpperCase()+t.slice(1)}</option>`).join('')}
                             </select>
-                            <input class="node-edit-input" style="width:auto;flex:1;margin:0;padding:4px 8px" data-aop="${a.id}" data-node="${i}" data-field="label" value="${esc(n.label)}" placeholder="Label">
+                            <input class="node-edit-input" style="width:auto;flex:1;margin:0;padding:4px 8px" data-aop="${esc(a.id)}" data-node="${i}" data-field="label" value="${esc(n.label)}" placeholder="Label">
                         </div>
-                        <textarea class="node-edit-input" data-aop="${a.id}" data-node="${i}" data-field="text" rows="2" style="resize:vertical">${esc(n.text)}</textarea>
-                        <input class="node-edit-input" data-aop="${a.id}" data-node="${i}" data-field="tools" value="${(n.tools||[]).join(', ')}" placeholder="Tools (comma-separated)" style="margin-top:4px">
+                        <textarea class="node-edit-input" data-aop="${esc(a.id)}" data-node="${i}" data-field="text" rows="2" style="resize:vertical">${esc(n.text)}</textarea>
+                        <input class="node-edit-input" data-aop="${esc(a.id)}" data-node="${i}" data-field="tools" value="${(n.tools||[]).join(', ')}" placeholder="Tools (comma-separated)" style="margin-top:4px">
                     </div>
                 </div>${conn}`;
             }
             return `<div class="aop-node aop-node-${n.type}"><div class="aop-node-icon">${nodeIcons[n.type]}</div><div class="aop-node-content"><div class="aop-node-label" style="color:${nodeColors[n.type]}">${esc(n.label)} · ${esc(n.type)}</div><div class="aop-node-text">${esc(n.text)}</div>${n.tools?`<div class="aop-node-tools">${n.tools.map(t=>`<span class="aop-node-tool">${esc(t)}</span>`).join('')}</div>`:''}</div></div>${conn}`;
         }).join('');
         const editBtns = isExp ? (isEditing
-            ? `<div style="display:flex;gap:6px;margin-top:10px"><button class="edit-btn edit-btn-save" onclick="event.stopPropagation();saveAopEdit('${a.id}')">💾 Save Changes</button><button class="edit-btn edit-btn-cancel" onclick="event.stopPropagation();cancelAopEdit()">Cancel</button></div>`
-            : `<button class="edit-btn" onclick="event.stopPropagation();startAopEdit('${a.id}')" style="margin-top:10px">✏️ Edit Workflow</button>`) : '';
+            ? `<div style="display:flex;gap:6px;margin-top:10px"><button class="edit-btn edit-btn-save" onclick="event.stopPropagation();saveAopEdit(${jsStr(a.id)})">💾 Save Changes</button><button class="edit-btn edit-btn-cancel" onclick="event.stopPropagation();cancelAopEdit()">Cancel</button></div>`
+            : `<button class="edit-btn" onclick="event.stopPropagation();startAopEdit(${jsStr(a.id)})" style="margin-top:10px">✏️ Edit Workflow</button>`) : '';
         return `<div class="aop-card">
             <div class="aop-header"><span class="aop-title">${esc(a.name)}</span><span class="aop-badge aop-badge-${a.status}">${esc(a.status.charAt(0).toUpperCase()+a.status.slice(1))}</span></div>
             <div class="aop-meta">${esc(a.id)} · Source: ${esc(a.sop)} · Owner: ${esc(a.owner)}</div>
-            <div class="aop-entry" onclick="event.stopPropagation();toggleEntry('${a.id}')"><span class="aop-entry-icon">${isEntryExp?'▼':'▶'}</span><div><div class="aop-entry-label">Entry Condition ${isEntryExp?'':'· Click to expand'}</div>${esc(a.entry)}${entryDetailHtml}</div></div>
+            <div class="aop-entry" onclick="event.stopPropagation();toggleEntry(${jsStr(a.id)})"><span class="aop-entry-icon">${isEntryExp?'▼':'▶'}</span><div><div class="aop-entry-label">Entry Condition ${isEntryExp?'':'· Click to expand'}</div>${esc(a.entry)}${entryDetailHtml}</div></div>
             <div class="aop-agents">${a.agents.map(ag=>`<span class="aop-agent-tag">${esc(ag)}</span>`).join('')}</div>
-            <button class="aop-flow-toggle" onclick="event.stopPropagation();toggleAop('${a.id}')">${isExp?'▲ Hide Workflow Nodes':'▼ Show Workflow Nodes ('+a.nodes.length+')'}</button>
+            <button class="aop-flow-toggle" onclick="event.stopPropagation();toggleAop(${jsStr(a.id)})">${isExp?'▲ Hide Workflow Nodes':'▼ Show Workflow Nodes ('+a.nodes.length+')'}</button>
             <div class="aop-flow ${isExp?'expanded':''}">${flowHtml}${editBtns}</div>
             <div class="aop-stats">
                 <div class="aop-stat">Executions: <span>${a.executions.toLocaleString()}</span></div>
@@ -3686,9 +3772,61 @@ const DISCOVERY_PLATFORM_NAMES = {
     mulesoft: 'MuleSoft Agent Fabric',
 };
 
+// True once the native connector row shows a terminal status stamped after `baselineAt`
+// (the row's own lastSyncAt captured at the click). Server time compared with server time:
+// comparing against Date.now() broke on any browser whose clock is off by more than a few
+// seconds, and the button then spun for the full ceiling.
+function scanFinished(nat, baselineAt) {
+    const TERMINAL = {ok: 1, partial: 1, error: 1};
+    if (!nat || !TERMINAL[nat.lastSyncStatus]) return false;
+    const at = nat.lastSyncAt ? Date.parse(nat.lastSyncAt) : NaN;
+    return !isNaN(at) && at > (baselineAt || 0);
+}
+
+// Discovery in flight. The two POSTs that start a run take a few seconds, and the run
+// itself 60-90s, so the button has to show progress from the click onward - otherwise the
+// UI looks dead and operators click again, firing a second scan.
+let discoveryBusy = false;
+function setDiscoveryBusy(on) {
+    discoveryBusy = on;
+    document.querySelectorAll('[data-discovery-btn]').forEach(b => {
+        b.disabled = on;
+        b.classList.toggle('btn-busy', on);
+        if (on) {
+            // Stash the original markup once: a second call must not capture the spinner
+            // as the label and leave it permanently spinning.
+            if (!b.dataset.idleLabel) b.dataset.idleLabel = b.innerHTML;
+            b.innerHTML = '<span class="btn-spin"></span> Discovering…';
+        } else if (b.dataset.idleLabel) {
+            b.innerHTML = b.dataset.idleLabel;
+        }
+    });
+}
+
 // Trigger a discovery sync (all platforms, or a subset), then refresh status,
 // live data and the registry. Surfaces discovered/removed counts in a toast.
 async function syncDiscovery(platforms) {
+    // Re-entry guard: a second run while one is in flight duplicates work and makes the
+    // "did the count change" poll below ambiguous.
+    //
+    // Say so rather than returning silently: the per-connector Discover buttons on the
+    // tiles are re-rendered on every poll, so they cannot carry a disabled state, and a
+    // scan can now run for up to 10 minutes. They stay blocked rather than running
+    // alongside, because every path ends by clearing the one shared busy state, which
+    // would release the main scan's spinner early.
+    if (discoveryBusy) {
+        showToast('A discovery run is already in progress. Try again when it finishes.');
+        return;
+    }
+    setDiscoveryBusy(true);
+    try {
+        return await syncDiscoveryInner(platforms);
+    } catch (err) {
+        setDiscoveryBusy(false);
+        showDiscoveryError('Discovery failed to start: ' + (err && err.message ? err.message : err));
+    }
+}
+async function syncDiscoveryInner(platforms) {
     // With the AgentCore discovery-scanner deployed, the Discover button (no explicit
     // platforms) triggers a native scan plus LLM classification via POST /discovery/scan. A
     // per-connector Discover uses the Lambda /discovery/sync, as does everything when the
@@ -3705,11 +3843,19 @@ async function syncDiscovery(platforms) {
         // simulated ones) are reached only by /discovery/sync. They are independent
         // fire-and-forget endpoints, so fire them together and let the one poll loop below
         // surface results from either.
+        // Acknowledge the click before awaiting anything: these two POSTs take a few
+        // seconds, and the operator needs feedback before they return.
+        showToast('Starting discovery…', {pending:true, duration:4000});
+        // Baseline for scanFinished: the row's lastSyncAt as it stands right now, read fresh
+        // so a stale cache cannot make the previous scan's stamp look like this one's.
+        try { await loadConnectorConfigs(); } catch (_) { /* baseline falls back to 0 */ }
+        const baseNat = (typeof connectorConfigs !== 'undefined' && connectorConfigs.native) || {};
+        const baselineAt = baseNat.lastSyncAt ? (Date.parse(baseNat.lastSyncAt) || 0) : 0;
         const [result, syncResult] = await Promise.all([
             scanDiscoveryCall(),
             syncDiscoveryCall(),
         ]);
-        if (!result && !syncResult) { showToast('Discovery failed to start', {pending:false}); return; }
+        if (!result && !syncResult) { setDiscoveryBusy(false); showToast('Discovery failed to start', {pending:false}); return; }
         // Name what is running: the two halves finish at different times, and a partial
         // failure must not read as total success.
         const started = [result ? 'this account' : null, syncResult ? 'connectors and member accounts' : null]
@@ -3717,18 +3863,46 @@ async function syncDiscovery(platforms) {
         showToast('Discovery running across ' + started + '. Results will appear here in about a minute.', {pending:true, duration:7000});
         if (!result) showDiscoveryError('The in-account scan failed to start; connector discovery is still running.', true);
         if (!syncResult) showDiscoveryError('Connector discovery failed to start; the in-account scan is still running.', true);
-        // Poll the registry so freshly-committed agents surface on their own.
+        // Poll until the scan says it is finished. The scan's own state is on the native
+        // connector row (lastSyncStatus/lastSyncAt, written by the invoker and the scanner),
+        // which loadConnectorConfigs already refreshes every tick. That is the only reliable
+        // end signal: a re-scan of an established fleet enriches and refreshes without
+        // adding rows, so "the registry grew" never fires, and a fixed timer re-enabled the
+        // button while the scan was still committing, inviting a second concurrent scan.
         let elapsed = 0;
         const before = registryData.length;
+        // The invoker waits up to 570s for the scanner inside a 600s function, so past this
+        // the scan has ended one way or another, even if no terminal stamp was written.
+        const SCAN_CEILING_S = 600;
+        let announcedGrowth = false;
         const poll = setInterval(async () => {
             elapsed += 15;
             // Connector config too: a sync can change a connector's status and coverage
             // summary, so refreshing only the counts leaves the tile self-contradictory.
             await loadConnectorConfigs(); await loadDiscoveryStatus(); await fetchLiveData(); await loadRegistry();
-            if (registryData.length > before) {
-                showToast('Discovery scan committed ' + (registryData.length - before) + ' agent(s) to the registry.');
+            if (!announcedGrowth && registryData.length > before) {
+                // Progress, not completion: the scan may still be enriching.
+                announcedGrowth = true;
+                showToast('Discovery committed ' + (registryData.length - before) + ' new agent(s) so far…', {pending:true});
             }
-            if (elapsed >= 120) clearInterval(poll);
+            const nat = (typeof connectorConfigs !== 'undefined' && connectorConfigs.native) || {};
+            // Only a terminal stamp newer than the click-time baseline counts: the row still
+            // carries the previous scan's terminal status until the invoker overwrites it.
+            const finished = result && scanFinished(nat, baselineAt);
+            if (finished) {
+                clearInterval(poll); setDiscoveryBusy(false);
+                const msg = 'Discovery ' + (nat.lastSyncStatus === 'ok' ? 'finished' : nat.lastSyncStatus === 'partial' ? 'finished with warnings' : 'failed') +
+                    (nat.lastSyncSummary ? ': ' + nat.lastSyncSummary : '.');
+                if (nat.lastSyncStatus === 'ok') showToast(msg);
+                else showDiscoveryError(msg, nat.lastSyncStatus === 'partial');
+                return;
+            }
+            // Without an in-account scan there is no row to watch, so use a short bound.
+            const ceiling = result ? SCAN_CEILING_S : 120;
+            if (elapsed >= ceiling) {
+                clearInterval(poll); setDiscoveryBusy(false);
+                if (result) showDiscoveryError('Discovery did not report completion within ' + Math.round(ceiling/60) + ' minutes; check the native connector for its last status.', true);
+            }
         }, 15000);
         return;
     }
@@ -3738,23 +3912,54 @@ async function syncDiscovery(platforms) {
         ? platforms.map(p => connectorLabel(p)).join(', ')
         : 'all connectors';
     showToast('Sync started for ' + scopeLabel + '...');
+    // Baselines for scanFinished: each connector row's lastSyncAt right now, read fresh, so
+    // only a stamp written by THIS sync counts as its outcome.
+    const plats = (Array.isArray(platforms) && platforms.length) ? platforms : [];
+    try { await loadConnectorConfigs(); } catch (_) { /* baselines fall back to 0 */ }
+    const baselines = {};
+    plats.forEach(p => {
+        const r = (typeof connectorConfigs !== 'undefined' && connectorConfigs[p]) || {};
+        baselines[p] = r.lastSyncAt ? (Date.parse(r.lastSyncAt) || 0) : 0;
+    });
     const result = await syncDiscoveryCall(platforms);
-    if (!result) { showToast('Sync failed for ' + scopeLabel); return; }
+    if (!result) { setDiscoveryBusy(false); showToast('Sync failed for ' + scopeLabel); return; }
     // The sync endpoint is fire-and-forget: it returns {status:'started'} and runs the
     // possibly slow multi-account scan in the background, so poll the registry. An array
     // response (the older synchronous shape) is handled too.
     if (!Array.isArray(result) && result.status === 'started') {
         showDiscoveryError('Discovery sync running — scanning connectors/accounts. Results appear in the registry shortly.', true);
-        let elapsed = 0; const before = registryData.length;
+        // Poll each connector's own row for its outcome. The agent count is no signal: a
+        // re-sync of unchanged agents leaves it the same, while the row records the actual
+        // outcome (e.g. 'partial: could not assume FlowAMPOrgDiscoveryRole'). Every exit
+        // reports.
+        // 300s: the discovery Lambda's own timeout, so past it the sync has ended.
+        const SYNC_CEILING_S = 300;
+        let elapsed = 0;
         const poll = setInterval(async () => {
             elapsed += 15;
             // Connector config too: a sync can change a connector's status and coverage
             // summary, so refreshing only the counts leaves the tile self-contradictory.
             await loadConnectorConfigs(); await loadDiscoveryStatus(); await fetchLiveData(); await loadRegistry();
-            if (registryData.length !== before) {
-                showToast('Discovery updated the registry (' + registryData.length + ' agents).');
+            const rows = (typeof connectorConfigs !== 'undefined' && connectorConfigs) || {};
+            if (plats.length && plats.every(p => scanFinished(rows[p], baselines[p]))) {
+                clearInterval(poll); setDiscoveryBusy(false);
+                plats.forEach(p => {
+                    const r = rows[p] || {};
+                    const word = r.lastSyncStatus === 'ok' ? 'finished'
+                        : r.lastSyncStatus === 'partial' ? 'finished with warnings' : 'failed';
+                    const msg = connectorLabel(p) + ' sync ' + word
+                        + (r.lastSyncSummary ? ': ' + r.lastSyncSummary : '')
+                        + (r.lastError && r.lastSyncStatus !== 'ok' ? ' (' + r.lastError + ')' : '');
+                    if (r.lastSyncStatus === 'ok') showToast(msg);
+                    else showDiscoveryError(msg, r.lastSyncStatus === 'partial');
+                });
+                return;
             }
-            if (elapsed >= 120) clearInterval(poll);
+            if (elapsed >= SYNC_CEILING_S) {
+                clearInterval(poll); setDiscoveryBusy(false);
+                showDiscoveryError(scopeLabel + ' sync did not report an outcome within '
+                    + Math.round(SYNC_CEILING_S / 60) + ' minutes; open the connector to see its last status.', true);
+            }
         }, 15000);
         return;
     }
@@ -3777,6 +3982,7 @@ async function syncDiscovery(platforms) {
     } else {
         showToast('Sync complete: ' + discovered + ' discovered, ' + removed + ' inactivated');
     }
+    setDiscoveryBusy(false);
 }
 
 // Render a discovery error/warning banner (red for hard failure, amber for partial).
@@ -4253,7 +4459,7 @@ function renderAgentRuntimeTable(){
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     if(atEl) atEl.innerHTML = agentMetrics.map(a=>{
         const sc = a.status==='active'?'#3fb950':'#d29922';
-        return `<tr><td style="font-weight:600">${a.name}</td><td>${a.inv.toLocaleString()}</td><td>${a.lat}ms</td><td style="color:${parseFloat(a.err)>0.1?'#f85149':'#3fb950'}">${a.err}</td><td>${a.tools.toLocaleString()}</td><td>${a.tok}</td><td><span style="color:${sc};font-weight:600">● ${a.status}</span></td></tr>`;
+        return `<tr><td style="font-weight:600">${esc(a.name)}</td><td>${a.inv.toLocaleString()}</td><td>${a.lat}ms</td><td style="color:${parseFloat(a.err)>0.1?'#f85149':'#3fb950'}">${a.err}</td><td>${a.tools.toLocaleString()}</td><td>${a.tok}</td><td><span style="color:${sc};font-weight:600">● ${a.status}</span></td></tr>`;
     }).join('');
 }
 
@@ -4480,7 +4686,7 @@ function inspectGraphNode(key,nodeId){
     document.getElementById('graphNodeInfo').innerHTML=`
         <div style="margin-bottom:8px"><span style="color:${typeColor[n.type]};font-weight:700">${n.label.replace(/\n/g,' ')}</span></div>
         <div style="margin-bottom:4px">Type: <b style="color:#dee4ea">${typeLabels[n.type]||n.type}</b></div>
-        <div style="margin-bottom:4px">ID: <span style="font-family:monospace;color:#dee4ea">${n.id}</span></div>
+        <div style="margin-bottom:4px">ID: <span style="font-family:monospace;color:#dee4ea">${esc(n.id)}</span></div>
         <div style="margin-bottom:4px">In: <span style="color:#dee4ea">${incoming.join(', ')||'—'}</span></div>
         <div>Out: <span style="color:#dee4ea">${outgoing.join(', ')||'—'}</span></div>`;
 }
@@ -4617,7 +4823,7 @@ function dsRenderDatasets(){
                 <span style="font-size:18px">🗂</span>
                 <div style="flex:1">
                     <div style="font-size:14px;font-weight:700;color:#edf0f4">${esc(d.name)}</div>
-                    <div style="font-size:12px;color:#9aacbe">${d.agent} · ${d.count} examples · ${d.experiments} experiments</div>
+                    <div style="font-size:12px;color:#9aacbe">${esc(d.agent)} · ${d.count} examples · ${d.experiments} experiments</div>
                 </div>
                 <div style="text-align:center;min-width:60px">
                     <div style="font-size:18px;font-weight:800;color:${parseInt(avgV3)>=90?'#3fb950':parseInt(avgV3)>=80?'#d29922':'#f85149'}">${avgV3}%</div>
@@ -4641,7 +4847,7 @@ function dsRenderDatasets(){
                         const s1=d.scores.v1[i],s2=d.scores.v2[i],s3=d.scores.v3[i];
                         const sc=v=>`<span style="color:${v>=0.9?'#3fb950':v>=0.7?'#d29922':'#f85149'};font-weight:600">${(v*100).toFixed(0)}%</span>`;
                         return `<tr style="border-top:1px solid #2e4058">
-                            <td style="padding:8px 14px;color:#9aacbe;font-family:monospace">${ex.id}</td>
+                            <td style="padding:8px 14px;color:#9aacbe;font-family:monospace">${esc(ex.id)}</td>
                             <td style="padding:8px 14px;color:#dee4ea;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ex.input)}</td>
                             <td style="padding:8px 14px;color:#9aacbe;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ex.expected)}</td>
                             <td style="padding:8px 14px">${ex.tags.map(t=>`<span style="background:#2e4058;color:#9aacbe;padding:1px 6px;border-radius:4px;font-size:10px;margin-right:3px">${t}</span>`).join('')}</td>
@@ -4708,7 +4914,7 @@ function dsRunExperiment(){
         const lat=400+Math.floor(Math.random()*1200);
         const pass=score>=0.7;
         rows.push(`<tr style="border-top:1px solid #2e4058">
-            <td style="padding:8px 14px;color:#9aacbe;font-family:monospace">${ex.id}</td>
+            <td style="padding:8px 14px;color:#9aacbe;font-family:monospace">${esc(ex.id)}</td>
             <td style="padding:8px 14px;color:#dee4ea">${esc(ex.input)}</td>
             <td style="padding:8px 14px;text-align:center"><span style="color:${score>=0.9?'#3fb950':score>=0.7?'#d29922':'#f85149'};font-weight:700">${(score*100).toFixed(0)}%</span></td>
             <td style="padding:8px 14px;text-align:center">${pass?'<span style="color:#3fb950">✅ Pass</span>':'<span style="color:#f85149">❌ Fail</span>'}</td>
@@ -4768,7 +4974,7 @@ function dsRunCompare(){
         else if(deltaNum<0){status='▼ Regressed';statusColor='#f85149';}
         else{status='— Same';statusColor='#9aacbe';}
         html+=`<tr style="border-top:1px solid #2e4058;${deltaNum<0?'background:#1a0a0a':''}">
-            <td style="padding:8px 14px;color:#9aacbe;font-family:monospace">${ex.id}</td>
+            <td style="padding:8px 14px;color:#9aacbe;font-family:monospace">${esc(ex.id)}</td>
             <td style="padding:8px 14px;color:#dee4ea">${esc(ex.input)}</td>
             <td style="padding:8px 10px;text-align:center">${sc(a)}</td>
             <td style="padding:8px 10px;text-align:center">${sc(b)}</td>
@@ -4838,7 +5044,7 @@ function annRender(){
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('annRubric').innerHTML=annRubrics.map(r=>`<div>
         <div style="font-size:11px;color:#9aacbe;margin-bottom:6px">${r}</div>
-        <div style="display:flex;gap:4px" id="rub-${r}">${[1,2,3,4,5].map(n=>`<button onclick="annSetRubric('${r}',${n},this)" style="width:32px;height:28px;background:#0a0e14;border:1px solid #2e4058;border-radius:4px;color:#8b95a1;font-size:12px;cursor:pointer;transition:all .12s">${n}</button>`).join('')}</div>
+        <div style="display:flex;gap:4px" id="rub-${r}">${[1,2,3,4,5].map(n=>`<button onclick="annSetRubric(${jsStr(r)},${n},this)" style="width:32px;height:28px;background:#0a0e14;border:1px solid #2e4058;border-radius:4px;color:#8b95a1;font-size:12px;cursor:pointer;transition:all .12s">${n}</button>`).join('')}</div>
     </div>`).join('');
     annRenderHistory();
 }
@@ -4889,7 +5095,7 @@ function annRenderHistory(){
                 ${r.notes?`<div style="color:#9aacbe;margin-top:2px;font-style:italic">"${esc(r.notes)}"</div>`:''}
             </div>
             ${rubStr?`<span style="color:#8b95a1;font-size:11px">${rubStr}</span>`:''}
-            <span style="color:${ac};font-weight:600;text-transform:capitalize;min-width:60px;text-align:right">${r.action}</span>
+            <span style="color:${ac};font-weight:600;text-transform:capitalize;min-width:60px;text-align:right">${esc(r.action)}</span>
             <span style="color:#8b95a1;min-width:60px;text-align:right">${r.reviewedAt}</span>
         </div>`;
     }).join('')||'<div style="text-align:center;padding:30px;color:#8b95a1">No reviews yet</div>';
@@ -5130,14 +5336,18 @@ function renderAudit(filter) {
     document.getElementById('auditCount').textContent = list.length+' events';
     const sevColors={info:'#4a9eff',warning:'#ff8c00',error:'#ff4444'};
     const sevIcons={info:'ℹ️',warning:'⚠️',error:'🔴'};
-    // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
+    // Every event field is esc()-encoded. They come from GET /events and carry agent names,
+    // actors, lifecycle reasons and LLM-derived summaries, none of which is trusted markup.
+    // The colour
+    // and icon are looked up from fixed maps, so an unknown severity yields no markup.
+    // nosemgrep: insecure-document-method - innerHTML sink; every interpolated value is esc()-encoded
     document.getElementById('auditTable').innerHTML = list.map(a=>`<tr>
-        <td style="font-size:12px;color:#e2e8ee;white-space:nowrap">${timeAgo(a.timestamp)}</td>
-        <td><span style="background:#333;padding:3px 8px;border-radius:4px;font-size:13px;font-weight:600">${a.action}</span></td>
-        <td style="font-size:13px">${a.actor}<br><span style="font-size:13px;color:#dae0e8">${a.actorRole}</span></td>
-        <td style="font-size:13px;color:#4a9eff">${a.target}</td>
-        <td style="font-size:12px;color:#e2e8ee;max-width:300px">${a.details}</td>
-        <td><span style="color:${sevColors[a.severity]}">${sevIcons[a.severity]} ${a.severity}</span></td>
+        <td style="font-size:12px;color:#e2e8ee;white-space:nowrap">${esc(timeAgo(a.timestamp))}</td>
+        <td><span style="background:#333;padding:3px 8px;border-radius:4px;font-size:13px;font-weight:600">${esc(a.action)}</span></td>
+        <td style="font-size:13px">${esc(a.actor)}<br><span style="font-size:13px;color:#dae0e8">${esc(a.actorRole)}</span></td>
+        <td style="font-size:13px;color:#4a9eff">${esc(a.target)}</td>
+        <td style="font-size:12px;color:#e2e8ee;max-width:300px">${esc(a.details)}</td>
+        <td><span style="color:${sevColors[a.severity]||'#9aacbe'}">${sevIcons[a.severity]||''} ${esc(a.severity)}</span></td>
     </tr>`).join('');
 }
 function filterAudit(f,el){document.querySelectorAll('#auditFilterBar .filter-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');renderAudit(f);}
@@ -5178,7 +5388,7 @@ function initTicker() {
     const now = Date.now();
     const items = tickerEvents.map((e,i) => {
         const secs = Math.floor(Math.random()*120)+1;
-        return `<span class="ticker-item"><span class="ticker-dot ticker-dot-${e.dot}"></span><strong>${e.agent}</strong> ${e.action} <span class="ticker-time">${secs}s ago</span></span>`;
+        return `<span class="ticker-item"><span class="ticker-dot ticker-dot-${e.dot}"></span><strong>${esc(e.agent)}</strong> ${esc(e.action)} <span class="ticker-time">${secs}s ago</span></span>`;
     }).join('');
     // nosemgrep: insecure-document-method - innerHTML sink; interpolated user/server data is esc()-encoded (HTML-entity), static template markup otherwise
     document.getElementById('tickerTrack').innerHTML = items + items;
@@ -5248,7 +5458,7 @@ function renderTopology() {
             const notScored=raiNotScored(sc);
             const nc=notScored?'#7a8a9c':(score>=95?'#4ade80':score>=92?'#60b0ff':'#f0a030');
             s+=`<line x1="${catX}" y1="${catY}" x2="${ax}" y2="${ay}" stroke="${color}" stroke-width="0.4" opacity="0.1"/>`;
-            s+=`<g style="cursor:pointer" onclick="showAgentDetail('${esc(agent)}')">`;
+            s+=`<g style="cursor:pointer" onclick="showAgentDetail(${jsStr(agent)})">`;
             s+=`<circle cx="${ax}" cy="${ay}" r="7" fill="#0d1117" stroke="${nc}" stroke-width="1.5" filter="url(#glow)"><title>${esc(agent)} — ${notScored?'not scored: '+esc(raiReason(sc)):'Score: '+score}</title></circle>`;
             s+=`<circle cx="${ax}" cy="${ay}" r="3" fill="${nc}" opacity="0.8"/>`;
             s+=`</g>`;
@@ -5260,7 +5470,7 @@ function renderTopology() {
         s+=`<g transform="translate(${catX-10},${catY-10})" color="${color}">${catSvgIcons[cat.name]||''}</g>`;
         s+=`</g>`;
         const ly=catY+(Math.sin(angle)>0.25?64:Math.sin(angle)<-0.25?-44:62);
-        s+=`<text x="${catX}" y="${ly}" text-anchor="middle" fill="${color}" font-size="11" font-weight="700" letter-spacing="0.3" style="cursor:pointer" onclick="topoZoomIn(${ci})">${cat.name}</text>`;
+        s+=`<text x="${catX}" y="${ly}" text-anchor="middle" fill="${color}" font-size="11" font-weight="700" letter-spacing="0.3" style="cursor:pointer" onclick="topoZoomIn(${ci})">${esc(cat.name)}</text>`;
         s+=`<text x="${catX}" y="${ly+14}" text-anchor="middle" fill="#7a8a9c" font-size="10">${cat.count} agents</text>`;
     });
     s+=`</g>`;
@@ -5301,7 +5511,7 @@ function topoZoomIn(ci) {
         d += `<line x1="40" y1="70" x2="${w-40}" y2="70" stroke="${color}" stroke-width="0.5" opacity="0.2"/>`;
 
         // Header with icon and animated underline
-        d += `<text x="${w/2}" y="38" text-anchor="middle" fill="${color}" font-size="22" font-weight="800" letter-spacing="-0.5" style="opacity:0;animation:topoCardIn 0.3s 0.05s forwards">${cat.name}</text>`;
+        d += `<text x="${w/2}" y="38" text-anchor="middle" fill="${color}" font-size="22" font-weight="800" letter-spacing="-0.5" style="opacity:0;animation:topoCardIn 0.3s 0.05s forwards">${esc(cat.name)}</text>`;
         d += `<text x="${w/2}" y="60" text-anchor="middle" fill="#6b7280" font-size="14" style="opacity:0;animation:topoCardIn 0.3s 0.1s forwards">${cat.description.split('—')[0].trim()}</text>`;
 
         // Back button
@@ -5323,7 +5533,7 @@ function topoZoomIn(ci) {
             const cost = fin ? '$'+fin.cost : '—';
             const delay = (ai * 0.04 + 0.15).toFixed(2);
 
-            d += `<g style="cursor:pointer;opacity:0;animation:topoCardIn 0.35s ${delay}s forwards" onclick="showAgentDetail('${esc(agent)}')">`;
+            d += `<g style="cursor:pointer;opacity:0;animation:topoCardIn 0.35s ${delay}s forwards" onclick="showAgentDetail(${jsStr(agent)})">`;
             // Card bg with hover glow
             d += `<rect x="${x}" y="${y}" width="${cardW}" height="${cardH}" rx="10" fill="#2e4058" stroke="#2e4058" stroke-width="1"/>`;
             d += `<rect x="${x}" y="${y}" width="${cardW}" height="${cardH}" rx="10" fill="none" stroke="${color}" stroke-width="0" opacity="0.6"><animate attributeName="stroke-width" from="0" to="1.5" begin="mouseover" dur="0.15s" fill="freeze"/><animate attributeName="stroke-width" from="1.5" to="0" begin="mouseout" dur="0.15s" fill="freeze"/></rect>`;
@@ -5402,10 +5612,10 @@ function buildCmdIndex() {
     // Agents
     agentCategories.forEach(c => (categoryAgents[c.name]||[]).forEach(a => {
         const ai = aiScoresData.find(s=>s.name===a);
-        items.push({type:'agent',name:a,desc:`${c.name}${ai?(raiNotScored(ai)?' · Not scored':' · Score: '+ai.score):''}`,icon:iconMap[c.name]||'🤖',action:()=>{showAgentDetail(a);closeCmdPalette();}});
+        items.push({type:'agent',name:a,desc:`${c.name}${ai?(raiNotScored(ai)?' · Not scored':' · Score: '+ai.score):''}`,icon:iconMap[c.name]||'🤖',action:()=>{showAgentDetail(a);closeCmdPalette();}}); // plain text: esc() is applied where this is rendered
     }));
     // AOP
-    aopsData.forEach(a => items.push({type:'aop',name:`${a.id}: ${a.name}`,desc:`${a.status} · ${a.owner}`,icon:'📋',action:()=>{showTab('aops',document.querySelector("[onclick*='aops']"));setTimeout(()=>toggleAop(a.id),100);closeCmdPalette();}}));
+    aopsData.forEach(a => items.push({type:'aop',name:`${a.id}: ${a.name}`,desc:`${a.status} · ${a.owner}`,icon:'📋',action:()=>{showTab('aops',document.querySelector("[onclick*='aops']"));setTimeout(()=>toggleAop(a.id),100);closeCmdPalette();}})); // plain text: esc() is applied where this is rendered
     // Compliance
     complianceData.forEach(c => items.push({type:'compliance',name:c.name,desc:`Score: ${c.score} · ${c.status}`,icon:'🛡️',action:()=>{showComplianceModal(c.name);closeCmdPalette();}}));
     return items;

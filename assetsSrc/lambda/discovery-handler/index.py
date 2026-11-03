@@ -10,7 +10,8 @@ Connectors:
                 `-c deployGovernanceAgents=false`; otherwise the AgentCore
                 `discovery-scanner` runtime owns native discovery (same control-plane calls
                 plus LLM enrichment) and this pass is skipped, so the two never double-write
-                one agent under different keys or statuses.
+                one agent under different keys or statuses. The skipped pass refreshes only
+                the tile's `details`; the scanner owns native's sync status.
   - `microsoft` Real Microsoft Foundry Agent Service scan (Entra client-credentials plus
                 the Foundry data-plane API). Reports 'skipped' until an operator configures
                 credentials in the UI, rather than failing.
@@ -157,13 +158,13 @@ def platform_status_fields(raw: str, bucket: str | None = None) -> dict:
 
     `platformStatusAt` marks this as a point-in-time sample, not a live read: discovery runs
     on a 6-hour schedule, so the UI needs the value's age to grey out a stale reading. It must
-    not use the module-level `NOW`, which is fixed for the life of a warm container and would
-    report an age of zero for an old sample.
+    be a point-in-time read, which is why it calls `_now()` rather than reusing a value
+    captured earlier in the run.
     """
     return {
         'platformStatus': bucket or normalize_platform_status(raw),
         'platformStatusRaw': str(raw or ''),
-        'platformStatusAt': datetime.now(timezone.utc).isoformat(),
+        'platformStatusAt': _now(),
     }
 # Cached Entra tokens keyed by (tenant, client_id, scope) -> (token, expires_at_epoch), at
 # module scope so a warm container reuses a token instead of re-minting one per run.
@@ -174,10 +175,80 @@ _token_cache: dict = {}
 # repopulated by each sweep, so a stale map cannot authorize inactivation in a project this
 # run never read.
 _FOUNDRY_COVERAGE: dict = {}
-# Member accounts the last org sweep actually read, by account id. Same purpose as
-# _FOUNDRY_COVERAGE: an account that could not be assumed into contributes no agents, so
-# without this its agents would look deleted and be inactivated wholesale.
-_ORG_ACCOUNTS_READ: set = set()
+# `<accountId>/<region>` scopes the last org sweep actually read in full. Same purpose as
+# _FOUNDRY_COVERAGE: an account that could not be assumed into, or a region whose listing
+# failed, contributes no agents, so without this its agents would look deleted and be
+# inactivated wholesale. Per account AND region, because failures are: authority per account
+# let a transient failure in one region retire every agent the account had there.
+_ORG_SCOPES_READ: set = set()
+# Native surfaces the last discover_native run listed in full, keyed by the
+# `platformMetadata.source` each row carries ('bedrock-agents',
+# 'bedrock-agentcore-harness', 'bedrock-agentcore'). Same purpose again, per surface: a
+# failed or unavailable listing protects only that surface's rows, so one surface the SDK
+# lacks (an old bundled boto3 without ListHarnesses) cannot freeze inactivation for the rest.
+_NATIVE_SURFACES_READ: set = set()
+# Backing runtimes of the harnesses this stack itself deploys (FLOWAMP_HARNESS_NAMES, set by
+# team-stack.ts). Recognised exactly when ListHarnesses is unavailable, so they are never
+# mistaken for an ambiguous `harness_*` runtime, which would switch off runtime inactivation.
+_OWN_HARNESS_BACKINGS = frozenset(
+    f'harness_{n.strip()}' for n in os.environ.get('FLOWAMP_HARNESS_NAMES', '').split(',')
+    if n.strip()
+)
+# `<accountId>/<region>` scopes where a listing did not complete this sweep, withheld from
+# _ORG_SCOPES_READ: assuming the role is not enough to earn inactivation authority,
+# because a throttled listing would otherwise retire every agent the account has. A missing
+# operation (an old SDK) is exempt, or it would freeze the scope on every run; that is safe
+# because the same SDK could never have discovered rows for that surface. _ORG_LISTING_WARN
+# is the subset worth a warning (real failures, not an unreachable or missing API).
+_ORG_LISTING_FAILED: set = set()
+_ORG_LISTING_WARN: set = set()
+
+
+def _org_scope_of(meta: dict) -> str:
+    """The `<accountId>/<region>` authority scope of an org-discovered row."""
+    return f"{(meta or {}).get('accountId', '')}/{(meta or {}).get('region', '')}"
+
+
+def _note_org_listing_failure(account_id: str, region: str, exc: BaseException) -> None:
+    kind = _listing_failure_kind(exc)
+    if kind == 'missing':
+        return
+    _ORG_LISTING_FAILED.add(f'{account_id}/{region}')
+    if kind == 'failed':
+        _ORG_LISTING_WARN.add(f'{account_id}/{region}')
+
+
+def _listing_failure_kind(exc: BaseException) -> str:
+    """Classify a failed listing: 'missing', 'unreachable' or 'failed'.
+
+    'missing'     the operation is not there at all: the client predates it, or the service
+                  rejects it as unknown. Fails identically on every run.
+    'unreachable' no endpoint answered (EndpointConnectionError). Permanent in a region
+                  without the service, but can also be a transient network failure, so it
+                  never earns inactivation authority; it is just not worth a warning.
+    'failed'      a throttle, a denial, a 5xx, or anything else: a real failure, reported.
+
+    No kind grants authority by itself; authority comes only from a listing that completed.
+    """
+    # Only the missing-operation AttributeError: a client too old to have the method. Any
+    # other AttributeError is a bug in this code and must stay a reported failure.
+    if isinstance(exc, AttributeError) and "has no attribute 'list_" in str(exc):
+        return 'missing'
+    if type(exc).__name__ == 'UnknownServiceError':
+        return 'missing'
+    code = (getattr(exc, 'response', None) or {}).get('Error', {}).get('Code', '')
+    if code in ('UnknownOperationException', 'InvalidAction'):
+        return 'missing'
+    if type(exc).__name__ == 'EndpointConnectionError':
+        return 'unreachable'
+    return 'failed'
+
+
+def _surface_unavailable(exc: BaseException) -> bool:
+    """True when a failed listing is not worth a warning: a missing operation or an
+    unreachable endpoint. These recur on every run, so warning would mark the connector
+    'partial' forever. The surface still gets no inactivation authority for the run."""
+    return _listing_failure_kind(exc) != 'failed'
 
 # Real cross-account org discovery, on by default (CDK enableOrgDiscovery). The aws-org
 # connector enumerates the AWS Organization (organizations:ListAccounts, callable only from
@@ -199,7 +270,23 @@ ORG_DISCOVERY_REGIONS = [
     ).split(',') if r.strip()
 ]
 
-NOW = datetime.now(timezone.utc).isoformat()
+def _now() -> str:
+    """The current UTC instant, computed per call.
+
+    Deliberately a function, not a module-level constant. Lambda reuses a warm container
+    across invocations, so a constant evaluated at import time is the COLD START instant:
+    every `lastSyncedAt` / `updatedAt` / `syncedAt` this handler wrote reported when the
+    container booted rather than when the sync ran. That is most visible on
+    POST /discovery/sync, which self-invokes into the same container seconds later and is
+    reused across UI clicks, so a freshly triggered sync could report hours of age.
+
+    The `...Z` form matches discovery-scanner and discovery-scan-invoker, which write
+    `lastSyncAt` on the SAME platform sentinel row. `datetime.isoformat()` emits
+    `+00:00` with microseconds, so mixing the two made any string comparison or sort
+    across the three writers wrong. Second precision also means two calls within one
+    record produce an identical value.
+    """
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 # Per-run, per-connector warnings surfaced to the UI, e.g. accounts that could not be assumed
 # during org discovery. Reset at the start of each connector run so the results dict can carry
@@ -305,7 +392,7 @@ def save_connector_config(platform: str, body: dict) -> dict:
         'tenantId': body.get('tenantId') or '',
         'clientId': body.get('clientId') or '',
         'secretArn': secret_arn,
-        'updatedAt': NOW,
+        'updatedAt': _now(),
     }
     table.put_item(Item=item)
     return redact_connector_config(item)
@@ -411,7 +498,7 @@ def _record_sync_outcome(platform: str, status: str, error: str = '',
         expr = ('SET lastSyncAt = :t, lastSyncStatus = :s, lastError = :e, '
                 'lastSyncSummary = :sum, platformId = :p')
         vals = {
-            ':t': NOW, ':s': status, ':e': error[:500], ':sum': summary[:500],
+            ':t': _now(), ':s': status, ':e': error[:500], ':sum': summary[:500],
             ':p': platform,
         }
         if details is not None:
@@ -424,6 +511,33 @@ def _record_sync_outcome(platform: str, status: str, error: str = '',
         )
     except Exception as e:
         logger.info(f"Could not stamp sync outcome for {platform}: {type(e).__name__}")
+
+
+def _record_platform_details(platform: str, details: dict) -> None:
+    """Refresh a platform tile's `details` map and leave the status fields untouched.
+
+    Needed where this Lambda has something to explain about a platform but is not the thing
+    that ran it. Native discovery is owned by the AgentCore discovery-scanner on the default
+    deploy path, and the scanner (plus discovery-scan-invoker, for the failures the scanner
+    cannot report for itself) writes lastSyncAt/lastSyncStatus/lastError/lastSyncSummary on
+    this same row. The 6-hour scheduled sync visits every connector including native, so
+    calling _record_sync_outcome here would overwrite that real outcome with 'skipped' within
+    hours of every scan, and a failed scan would again be indistinguishable from a quiet one.
+
+    Same swallow-and-log contract as _record_sync_outcome: losing an explanatory tile must
+    never fail a discovery run.
+    """
+    try:
+        table.update_item(
+            Key={'agentId': PLATFORM_SENTINEL_PK, 'sk': f'PLATFORM#{platform}'},
+            UpdateExpression='SET details = :d, platformId = :p',
+            ExpressionAttributeValues={
+                ':d': _sanitize_details(details or {}),
+                ':p': platform,
+            },
+        )
+    except Exception as e:
+        logger.info(f"Could not stamp platform details for {platform}: {type(e).__name__}")
 
 
 def _sanitize_details(details: dict) -> dict:
@@ -682,6 +796,11 @@ def classify_record(agent, existing):
     ]
     return ('enrich' if missing else 'refresh'), missing
 
+def _is_absent(value) -> bool:
+    """None, '' and empty containers carry no information; 0 and False do."""
+    return value is None or value == '' or (isinstance(value, (list, dict, set)) and not value)
+
+
 def upsert_agent(agent: dict):
     """Write a normalized agent record, classifying add/enrich/refresh.
 
@@ -699,28 +818,40 @@ def upsert_agent(agent: dict):
 
     action, _missing = classify_record(agent, existing)
     verified = list(existing.get('humanVerifiedFields') or [])
-    agent['lastSyncedAt'] = NOW
+    agent['lastSyncedAt'] = _now()
 
     if action == 'add':
         # AgentRecord uses 'discovered' for a newly-found agent; the UI badge set is
         # active/warning/error/inactive/discovered.
         agent['status'] = agent.get('status') or 'discovered'
-        agent['discoveredAt'] = NOW
+        agent['discoveredAt'] = _now()
         agent['aiInferred'] = False
         agent['humanVerifiedFields'] = []
     else:
-        # enrich / refresh: carry immutable and verified fields forward from the stored row,
-        # so human-set status, the original discoveredAt and locked fields survive the sync.
+        # enrich / refresh: MERGE onto the stored row rather than replace it. put_item writes
+        # the whole item, so writing only what the connector produced would drop every
+        # field it does not know about (costCenter, businessUnit, tags, escalationGroup,
+        # lastAuditedAt, raiScoreStatus, invocable, ...), and the connectors' `owner: ''`
+        # would wipe a human-assigned owner. Three rules:
+        #   - start from the stored row, so anything the connector does not send survives;
+        #   - a human-verified field is never overwritten;
+        #   - an EMPTY incoming value never blanks a stored non-empty one. 0 and False are
+        #     values, not absences, so a real invocable=False still lands. This also
+        #     protects owners that were set without a lock.
+        merged = dict(existing)
+        for f, value in agent.items():
+            if f in verified:
+                continue
+            if _is_absent(value) and not _is_absent(existing.get(f)):
+                continue
+            merged[f] = value
+        agent = merged
         for f in IMMUTABLE_FIELDS:
             if f in existing:
                 agent[f] = existing[f]
-        for f in ('displayName', *ENRICHMENT_FIELDS):
-            # Never overwrite a verified field, and never blank out an already-populated
-            # field with an empty incoming value.
-            if f in verified or (existing.get(f) and not agent.get(f)):
-                agent[f] = existing.get(f)
         agent['humanVerifiedFields'] = existing.get('humanVerifiedFields', [])
         agent['aiInferred'] = existing.get('aiInferred', False)
+        agent['lastSyncedAt'] = _now()
 
     # Convert floats to Decimal for DynamoDB
     agent = json.loads(json.dumps(agent, default=decimal_default), parse_float=Decimal)
@@ -1032,6 +1163,10 @@ def discover_microsoft(config: dict) -> list:
     Returns [] and records a warning when the connector is unconfigured or disabled, so a
     default deploy stays quiet.
     """
+    # First, before any early return: every return below that skips the sweep would
+    # otherwise leave the PREVIOUS run's coverage in this warm container, and run_discovery
+    # would inactivate against those projects with nothing seen, retiring their agents.
+    _FOUNDRY_COVERAGE.clear()
     cfg = config or load_connector_config('microsoft')
     if not cfg or not cfg.get('secretArn'):
         _CONNECTOR_WARNINGS.append(
@@ -1206,6 +1341,8 @@ def discover_native(config: dict) -> list:
     reports what exists rather than only what is current.
     """
     agents = []
+    # Rebuilt every run: a surface earns inactivation authority only by listing in full now.
+    _NATIVE_SURFACES_READ.clear()
 
     # Bedrock Agents
     try:
@@ -1241,8 +1378,19 @@ def discover_native(config: dict) -> list:
                     },
                 })
         logger.info(f"Native: found {len(agents)} Bedrock Agent(s)")
+        _NATIVE_SURFACES_READ.add('bedrock-agents')
     except Exception as e:
         logger.error(f"Native Bedrock Agents discovery failed: {e}")
+        # No entry in _NATIVE_SURFACES_READ, so run_discovery gives this surface no
+        # inactivation authority this run: a failed listing is indistinguishable from an
+        # empty one, so logging alone would let one throttle retire every Classic row.
+        # The same applies to the two AgentCore passes below; the scanner's equivalent guard
+        # is _scan_health in discovery-scanner/main.py. The warning is skipped for an API
+        # that is simply not there, which would otherwise read 'partial' on every run.
+        if not _surface_unavailable(e):
+            _CONNECTOR_WARNINGS.append(
+                f'Bedrock Agents (Classic) could not be listed, so no Classic agent was '
+                f'inactivated this run: {type(e).__name__}')
 
     # Bedrock AgentCore harnesses: the managed agent loop (model + prompt + tools declared as
     # configuration) that AgentCore runs for you.
@@ -1252,71 +1400,126 @@ def discover_native(config: dict) -> list:
     # backing runtime name is recorded here and skipped in the runtime pass below, or one agent
     # registers twice under two different names.
     harness_runtime_names = set()
+    # Tracks whether the harness listing below actually succeeded. An empty
+    # `harness_runtime_names` means both "no harnesses exist" and "the call failed", and the
+    # runtime pass has to tell those apart or it double-registers every harness.
+    harness_listing_ok = True
     try:
         agentcore = boto3.client('bedrock-agentcore-control')
-        harnesses = agentcore.list_harnesses().get('harnesses', [])
-        for h in harnesses:
-            h_id = h.get('harnessId', h.get('harnessName', ''))
-            h_name = h.get('harnessName', h_id)
-            # AgentCore names the backing runtime `harness_<harnessName>`.
-            harness_runtime_names.add(f"harness_{h_name}")
-            agents.append({
-                'agentId': _clean_native_id(h_name, h_id),
-                'name': h_name,
-                'platform': 'native',
-                'platformAgentId': h_id,
-                'category': 'AWS Native',
-                'system': 'Amazon Bedrock AgentCore',
-                'runtime': 'AgentCore Harness',
-                'status': 'pending-review',
-                **demo_metrics(h_id),
-                'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
-                'owner': '',
-                'platformMetadata': {
-                    'source': 'bedrock-agentcore-harness',
-                    'status': h.get('status', ''),
-                    'updatedAt': str(h.get('updatedAt', '')),
-                },
-            })
-        logger.info(f"Native: found {len(harnesses)} AgentCore harness(es)")
+        # Paginate, matching discovery-scanner/main.py: a truncated harness listing leaves
+        # `harness_runtime_names` incomplete, and the runtime pass below then registers every
+        # missing harness a second time as its own `harness_<name>` backing runtime.
+        harness_count = 0
+        harness_token = None
+        while True:
+            kwargs = {} if not harness_token else {'nextToken': harness_token}
+            resp = agentcore.list_harnesses(**kwargs)
+            for h in resp.get('harnesses', []):
+                harness_count += 1
+                h_id = h.get('harnessId', h.get('harnessName', ''))
+                h_name = h.get('harnessName', h_id)
+                # AgentCore names the backing runtime `harness_<harnessName>`.
+                harness_runtime_names.add(f"harness_{h_name}")
+                agents.append({
+                    'agentId': _clean_native_id(h_name, h_id),
+                    'name': h_name,
+                    'platform': 'native',
+                    'platformAgentId': h_id,
+                    'category': 'AWS Native',
+                    'system': 'Amazon Bedrock AgentCore',
+                    'runtime': 'AgentCore Harness',
+                    'status': 'pending-review',
+                    **demo_metrics(h_id),
+                    'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
+                    'owner': '',
+                    'platformMetadata': {
+                        'source': 'bedrock-agentcore-harness',
+                        'status': h.get('status', ''),
+                        'updatedAt': str(h.get('updatedAt', '')),
+                    },
+                })
+            harness_token = resp.get('nextToken')
+            if not harness_token:
+                break
+        logger.info(f"Native: found {harness_count} AgentCore harness(es)")
+        _NATIVE_SURFACES_READ.add('bedrock-agentcore-harness')
     except Exception as e:
         # ListHarnesses needs a recent SDK and a region where harnesses are available.
+        harness_listing_ok = False
         logger.info(f"Native AgentCore harness discovery skipped: {e}")
+        if not _surface_unavailable(e):
+            _CONNECTOR_WARNINGS.append(
+                f'AgentCore harnesses could not be listed, so no harness was inactivated '
+                f'this run: {type(e).__name__}')
 
     # Bedrock AgentCore runtimes (containerized / direct-code agents), excluding
     # the runtimes that merely back a harness discovered above.
     try:
         agentcore = boto3.client('bedrock-agentcore-control')
-        resp = agentcore.list_agent_runtimes()
+        # Paginate: ListAgentRuntimes defaults to 10 per page (max 100), so one call silently
+        # drops the rest of the fleet.
         skipped = 0
-        for rt in resp.get('agentRuntimes', []):
-            rt_id = rt.get('agentRuntimeId', rt.get('agentRuntimeName', ''))
-            rt_name = rt.get('agentRuntimeName', rt_id)
-            if rt_name in harness_runtime_names:
-                skipped += 1
-                continue
-            agents.append({
-                'agentId': _clean_native_id(rt_name, rt_id),
-                'name': rt_name,
-                'platform': 'native',
-                'platformAgentId': rt_id,
-                'category': 'AWS Native',
-                'system': 'Amazon Bedrock AgentCore',
-                'runtime': 'AgentCore Runtime',
-                'status': 'pending-review',
-                **demo_metrics(rt_id),
-                'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
-                'owner': '',
-                'platformMetadata': {'source': 'bedrock-agentcore', 'status': rt.get('status', ''),
-                                     'accountId': _own_account_id(),
-                                     'region': os.environ.get('AWS_REGION', '')},
-            })
+        # Skipped only on the `harness_` prefix guess, with ListHarnesses down. Any of them
+        # could be a customer runtime genuinely named that way, so a non-zero count takes
+        # inactivation authority away from the runtime surface for this run.
+        prefix_skipped = 0
+        seen = 0
+        rt_token = None
+        while True:
+            kwargs = {} if not rt_token else {'nextToken': rt_token}
+            resp = agentcore.list_agent_runtimes(**kwargs)
+            for rt in resp.get('agentRuntimes', []):
+                seen += 1
+                rt_id = rt.get('agentRuntimeId', rt.get('agentRuntimeName', ''))
+                rt_name = rt.get('agentRuntimeName', rt_id)
+                # The prefix fallback applies only when the harness listing failed; see the
+                # matching comment in discovery-scanner/main.py, which must stay in step.
+                if rt_name in harness_runtime_names or rt_name in _OWN_HARNESS_BACKINGS:
+                    skipped += 1
+                    continue
+                if not harness_listing_ok and rt_name.startswith('harness_'):
+                    skipped += 1
+                    prefix_skipped += 1
+                    continue
+                agents.append({
+                    'agentId': _clean_native_id(rt_name, rt_id),
+                    'name': rt_name,
+                    'platform': 'native',
+                    'platformAgentId': rt_id,
+                    'category': 'AWS Native',
+                    'system': 'Amazon Bedrock AgentCore',
+                    'runtime': 'AgentCore Runtime',
+                    'status': 'pending-review',
+                    **demo_metrics(rt_id),
+                    'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
+                    'owner': '',
+                    'platformMetadata': {'source': 'bedrock-agentcore', 'status': rt.get('status', ''),
+                                         'accountId': _own_account_id(),
+                                         'region': os.environ.get('AWS_REGION', '')},
+                })
+            rt_token = resp.get('nextToken')
+            if not rt_token:
+                break
         logger.info(
-            f"Native: found {len(resp.get('agentRuntimes', []))} AgentCore runtime(s), "
+            f"Native: found {seen} AgentCore runtime(s), "
             f"{skipped} skipped as harness-backing"
         )
+        if prefix_skipped == 0:
+            _NATIVE_SURFACES_READ.add('bedrock-agentcore')
+        else:
+            # A warning, not just a log: switching runtime inactivation off is an outcome an
+            # operator needs to see, and it recurs every run while ListHarnesses is down.
+            _CONNECTOR_WARNINGS.append(
+                f'{prefix_skipped} harness_* runtime(s) could not be matched to a harness '
+                f'because ListHarnesses failed, so no runtime was inactivated this run')
     except Exception as e:
         logger.info(f"Native AgentCore runtime discovery skipped: {e}")
+        # Also covers a failure on a later page: the agents already appended from earlier
+        # pages are real, but everything after the failed page is unknown, not gone.
+        if not _surface_unavailable(e):
+            _CONNECTOR_WARNINGS.append(
+                f'AgentCore runtimes could not be listed in full, so no runtime was '
+                f'inactivated this run: {type(e).__name__}')
 
     # Per-surface counts: a single total hides which inventory the agents came from, and hides a
     # surface returning nothing (a missing permission, a region without harnesses).
@@ -1513,6 +1716,7 @@ def _list_bedrock_agents_in(session, account_id: str, account_name: str, region:
                 })
     except Exception as e:
         logger.warning(f"Org discovery: list_agents failed in {account_id}/{region}: {type(e).__name__}: {e}")
+        _note_org_listing_failure(account_id, region, e)
     logger.info(f"Org discovery: {account_id}/{region} bedrock-agents found={len(found)}")
     return found
 
@@ -1520,100 +1724,141 @@ def _list_bedrock_agents_in(session, account_id: str, account_name: str, region:
 def _list_agentcore_harnesses_in(session, account_id: str, account_name: str, region: str):
     """List Bedrock AgentCore harnesses in one account+region via an assumed session.
 
-    Returns (records, backing_runtime_names). The second value feeds the runtime lister so a
-    harness is not also registered as its own backing runtime, as in discover_native().
+    Returns (records, backing_runtime_names, listing_ok). The second value feeds the runtime
+    lister so a harness is not also registered as its own backing runtime, as in
+    discover_native(). The third distinguishes "this account+region has no harnesses" from
+    "the call failed": both leave `backing` empty, but only the latter means the runtime
+    lister cannot trust it and must fall back to the `harness_` prefix.
     """
     found = []
     backing = set()
+    listing_ok = True
     try:
         client = session.client('bedrock-agentcore-control', region_name=region)
-        for h in client.list_harnesses().get('harnesses', []):
-            h_id = h.get('harnessId', h.get('harnessName', ''))
-            h_name = h.get('harnessName', h_id)
-            backing.add(f"harness_{h_name}")
-            found.append({
-                'agentId': f"native:{account_id}:{region}:harness:{h_id}",
-                'name': h_name,
-                'platform': 'aws-org',
-                'platformAgentId': h_id,
-                'accountId': account_id,
-                'accountName': account_name,
-                'accountLabel': account_name,
-                'region': region,
-                'category': 'AWS Native',
-                'system': 'Amazon Bedrock AgentCore',
-                'runtime': 'AgentCore Harness',
-                'source': 'external-connector',
-                'status': 'pending-review',
-                **platform_status_fields(h.get('status', '')),
-                **demo_metrics(f"{account_id}:{h_id}"),
-                'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
-                'owner': '',
-                'platformMetadata': {
-                    'source': 'aws-organizations',
+        # Paginate: ListHarnesses caps maxResults at 100, so a single call silently
+        # truncates a large fleet. Worse than losing those rows, a truncated harness
+        # listing leaves `backing` incomplete, and every harness missing from it gets
+        # registered twice - once here and once as its own `harness_<name>` runtime.
+        harness_token = None
+        while True:
+            kwargs = {} if not harness_token else {'nextToken': harness_token}
+            resp = client.list_harnesses(**kwargs)
+            for h in resp.get('harnesses', []):
+                h_id = h.get('harnessId', h.get('harnessName', ''))
+                h_name = h.get('harnessName', h_id)
+                backing.add(f"harness_{h_name}")
+                found.append({
+                    'agentId': f"native:{account_id}:{region}:harness:{h_id}",
+                    'name': h_name,
+                    'platform': 'aws-org',
+                    'platformAgentId': h_id,
                     'accountId': account_id,
                     'accountName': account_name,
                     'accountLabel': account_name,
                     'region': region,
-                    'status': h.get('status', ''),
-                },
-            })
+                    'category': 'AWS Native',
+                    'system': 'Amazon Bedrock AgentCore',
+                    'runtime': 'AgentCore Harness',
+                    'source': 'external-connector',
+                    'status': 'pending-review',
+                    **platform_status_fields(h.get('status', '')),
+                    **demo_metrics(f"{account_id}:{h_id}"),
+                    'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
+                    'owner': '',
+                    'platformMetadata': {
+                        'source': 'aws-organizations',
+                        'accountId': account_id,
+                        'accountName': account_name,
+                        'accountLabel': account_name,
+                        'region': region,
+                        'status': h.get('status', ''),
+                    },
+                })
+            harness_token = resp.get('nextToken')
+            if not harness_token:
+                break
     except Exception as e:
         # Harnesses are not available in every region; log and move on.
+        listing_ok = False
         logger.info(f"Org discovery: list_harnesses skipped in {account_id}/{region}: {e}")
+        _note_org_listing_failure(account_id, region, e)
     logger.info(f"Org discovery: {account_id}/{region} harnesses found={len(found)}")
-    return found, backing
+    return found, backing, listing_ok
 
 
 def _list_agentcore_runtimes_in(session, account_id: str, account_name: str, region: str,
-                                skip_names=None) -> list:
+                                skip_names=None, skip_harness_prefixed: bool = False) -> list:
     """List Bedrock AgentCore runtimes in one account+region via an assumed session.
 
     Cross-account discovery covers the same three surfaces as the single-account native
     connector. `skip_names` carries the harness-backing runtime names to exclude.
+
+    `skip_harness_prefixed` is set when the harness listing for this account+region failed,
+    which leaves `skip_names` empty and would otherwise register every harness twice: once
+    from the harness pass and once as its own `harness_<name>` backing runtime. It is scoped
+    to that failure on purpose, so a customer runtime legitimately named `harness_*` is still
+    discovered whenever the harness pass succeeded.
     """
     found = []
     skip_names = skip_names or set()
     skipped = 0
     try:
         client = session.client('bedrock-agentcore-control', region_name=region)
-        resp = client.list_agent_runtimes()
-        for rt in resp.get('agentRuntimes', resp.get('agentRuntimeSummaries', [])):
-            rt_id = rt.get('agentRuntimeId', rt.get('agentRuntimeName', ''))
-            rt_name = rt.get('agentRuntimeName', rt_id)
-            if rt_name in skip_names:
-                skipped += 1
-                continue
-            found.append({
-                'agentId': f"native:{account_id}:{region}:agentcore:{rt_id}",
-                'name': rt_name,
-                'platform': 'aws-org',
-                'platformAgentId': rt_id,
-                'accountId': account_id,
-                'accountName': account_name,
-                'accountLabel': account_name,
-                'region': region,
-                'category': 'AWS Native',
-                'system': 'Amazon Bedrock AgentCore',
-                'runtime': 'AgentCore Runtime',
-                'source': 'external-connector',
-                'status': 'pending-review',
-                **platform_status_fields(rt.get('status', '')),
-                **demo_metrics(f"{account_id}:{rt_id}"),
-                'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
-                'owner': '',
-                'platformMetadata': {
-                    'source': 'aws-organizations',
+        # Paginate: ListAgentRuntimes returns only 10 per page by default (max 100), so a
+        # single call drops everything past the first page.
+        rt_token = None
+        while True:
+            kwargs = {} if not rt_token else {'nextToken': rt_token}
+            resp = client.list_agent_runtimes(**kwargs)
+            for rt in resp.get('agentRuntimes', resp.get('agentRuntimeSummaries', [])):
+                rt_id = rt.get('agentRuntimeId', rt.get('agentRuntimeName', ''))
+                rt_name = rt.get('agentRuntimeName', rt_id)
+                if (skip_harness_prefixed and rt_name not in skip_names
+                        and rt_name.startswith('harness_')):
+                    # Skipped on the prefix alone, with the harness listing down. It may be
+                    # a customer runtime genuinely named harness_*, so this scope cannot
+                    # prove anything is gone: no inactivation authority this run (the same
+                    # guard the scanner and discover_native apply).
+                    _ORG_LISTING_FAILED.add(f'{account_id}/{region}')
+                if rt_name in skip_names or (
+                    skip_harness_prefixed and rt_name.startswith('harness_')
+                ):
+                    skipped += 1
+                    continue
+                found.append({
+                    'agentId': f"native:{account_id}:{region}:agentcore:{rt_id}",
+                    'name': rt_name,
+                    'platform': 'aws-org',
+                    'platformAgentId': rt_id,
                     'accountId': account_id,
                     'accountName': account_name,
                     'accountLabel': account_name,
                     'region': region,
-                    'status': rt.get('status', ''),
-                },
-            })
+                    'category': 'AWS Native',
+                    'system': 'Amazon Bedrock AgentCore',
+                    'runtime': 'AgentCore Runtime',
+                    'source': 'external-connector',
+                    'status': 'pending-review',
+                    **platform_status_fields(rt.get('status', '')),
+                    **demo_metrics(f"{account_id}:{rt_id}"),
+                    'score': 0, 'fairness': 0, 'transparency': 0, 'accountability': 0, 'ethics': 0,
+                    'owner': '',
+                    'platformMetadata': {
+                        'source': 'aws-organizations',
+                        'accountId': account_id,
+                        'accountName': account_name,
+                        'accountLabel': account_name,
+                        'region': region,
+                        'status': rt.get('status', ''),
+                    },
+                })
+            rt_token = resp.get('nextToken')
+            if not rt_token:
+                break
     except Exception as e:
         # AgentCore is not available in every region; log and move on.
         logger.info(f"Org discovery: list_agent_runtimes skipped in {account_id}/{region}: {e}")
+        _note_org_listing_failure(account_id, region, e)
     logger.info(f"Org discovery: {account_id}/{region} runtimes found={len(found)}, "
                 f"{skipped} skipped as harness-backing")
     return found
@@ -1627,6 +1872,12 @@ def _discover_aws_org_real() -> list:
     those agents are covered by native discovery or the AgentCore scanner, so including them here
     would double-write them under a different native:<acct>:<region>:... key.
     """
+    # First, before any early return: a failed STS call or a throttled ListAccounts returns
+    # before the sweep and must not leave the previous run's accounts authorized here, or
+    # run_discovery would retire every agent in them. The UI's polling keeps this container warm.
+    _ORG_SCOPES_READ.clear()
+    _ORG_LISTING_FAILED.clear()
+    _ORG_LISTING_WARN.clear()
     try:
         own_account = boto3.client('sts').get_caller_identity()['Account']
     except Exception as e:
@@ -1672,18 +1923,25 @@ def _discover_aws_org_real() -> list:
             agents.extend(_list_bedrock_agents_in(session, account_id, account_name, region))
             # Harnesses first: their backing runtimes are then skipped below so one
             # logical agent is not registered twice.
-            harnesses, backing = _list_agentcore_harnesses_in(
+            harnesses, backing, harness_listing_ok = _list_agentcore_harnesses_in(
                 session, account_id, account_name, region)
             agents.extend(harnesses)
             agents.extend(_list_agentcore_runtimes_in(
-                session, account_id, account_name, region, skip_names=backing))
+                session, account_id, account_name, region, skip_names=backing,
+                skip_harness_prefixed=not harness_listing_ok))
     logger.info(f"Org discovery: scanned {scanned} member account(s) across "
                 f"{len(ORG_DISCOVERY_REGIONS)} region(s); found {len(agents)} agent(s)")
 
     # Hand the successfully-read accounts to run_discovery so inactivation is limited to them.
     # Cleared every run, so a stale set cannot authorize inactivation in an unreached account.
-    _ORG_ACCOUNTS_READ.clear()
-    _ORG_ACCOUNTS_READ.update(scanned_accounts)
+    _ORG_SCOPES_READ.clear()
+    _ORG_SCOPES_READ.update(
+        {f'{acct}/{region}' for acct in scanned_accounts for region in ORG_DISCOVERY_REGIONS}
+        - _ORG_LISTING_FAILED)
+    if _ORG_LISTING_WARN:
+        _CONNECTOR_WARNINGS.append(
+            'Listing failed in ' + ', '.join(sorted(_ORG_LISTING_WARN))
+            + '; agents there were not inactivated this run')
 
     summary = f'{scanned} member account(s) scanned'
     if unreachable:
@@ -1743,8 +2001,29 @@ CONNECTORS = {
 AUTHORITATIVE_PLATFORMS = frozenset({'native', 'microsoft', 'aws-org'})
 
 
+def _scan_all(tbl, **kwargs) -> list:
+    """Every item a Scan matches, across ALL pages.
+
+    A Scan returns at most 1 MB per call, and AgentTable is single-table: INFO rows share it
+    with EVENT#, AUDIT#, REVIEW#, COST# and COMPLIANCE# rows, so it passes 1 MB within weeks.
+    A single-page Scan then silently returned a subset, so agents went missing from lists,
+    scoring and inactivation with no error anywhere. tests/test_pagination.py keeps every
+    Scan in this module routed through here.
+    """
+    items, start_key = [], None
+    while True:
+        page_kwargs = dict(kwargs)
+        if start_key:
+            page_kwargs['ExclusiveStartKey'] = start_key
+        resp = tbl.scan(**page_kwargs)
+        items.extend(resp.get('Items', []))
+        start_key = resp.get('LastEvaluatedKey')
+        if not start_key:
+            return items
+
+
 def _inactivate_missing(platform: str, seen_ids: set, scopes_read: set | None = None,
-                        scope_field: str = 'projectKey') -> int:
+                        scope_field: str = 'projectKey', scope_of=None) -> int:
     """Mark agents on `platform` that were absent from this scan as inactive.
 
     Only connectors reading a real API may call this (see AUTHORITATIVE_PLATFORMS), and only when
@@ -1760,7 +2039,7 @@ def _inactivate_missing(platform: str, seen_ids: set, scopes_read: set | None = 
     Rows where a human has locked 'status', and rows already inactive, are skipped.
     """
     from boto3.dynamodb.conditions import Attr
-    items = table.scan(FilterExpression=Attr('sk').eq('INFO')).get('Items', [])
+    items = _scan_all(table, FilterExpression=Attr('sk').eq('INFO'))
     removed = 0
     for i in items:
         if i.get('platform') != platform:
@@ -1768,7 +2047,9 @@ def _inactivate_missing(platform: str, seen_ids: set, scopes_read: set | None = 
         if scopes_read is not None:
             # `scope_field` differs per connector: Foundry scopes by project (`projectKey`), org
             # discovery by member account (`accountId`).
-            scope = ((i.get('platformMetadata') or {}).get(scope_field)) or ''
+            # `scope_of` derives a composite scope (org discovery: account AND region).
+            meta = i.get('platformMetadata') or {}
+            scope = scope_of(meta) if scope_of else (meta.get(scope_field) or '')
             if scope not in scopes_read:
                 # Either the scope was unreadable this run, or the row predates scope
                 # tracking. Both mean the agent cannot be proven gone.
@@ -1794,7 +2075,7 @@ def _inactivate_missing(platform: str, seen_ids: set, scopes_read: set | None = 
             ExpressionAttributeNames={'#s': 'status'},
             ExpressionAttributeValues={
                 ':inactive': 'inactive',
-                ':now': NOW,
+                ':now': _now(),
                 ':pstatus': PLATFORM_STATUS_UNKNOWN,
                 ':praw': 'not-found',
             },
@@ -1817,15 +2098,18 @@ def run_discovery(platforms: list[str] | None = None) -> list[dict]:
             results.append({
                 'platform': p,
                 'skipped': 'native discovery is owned by the AgentCore discovery-scanner',
-                'syncedAt': NOW,
+                'syncedAt': _now(),
             })
-            # A tile that never runs still has to explain itself, or it reads as broken.
-            _record_sync_outcome(p, 'skipped', '', 'Owned by the AgentCore discovery-scanner',
-                                 details={
-                                     'discoveryOwner': 'discovery-scanner (AgentCore runtime, with LLM enrichment)',
-                                     'reason': 'This Lambda cedes native discovery to the scanner so the two never double-write the same agent.',
-                                     'reEnableWith': '-c deployGovernanceAgents=false',
-                                 })
+            # A tile that never runs still has to explain itself, or it reads as broken — but
+            # the explanation only, never the status fields. The scanner and its invoker own
+            # lastSyncStatus for native and this sync did not run one, so stamping 'skipped'
+            # here would bury the outcome of the last real scan. See _record_platform_details.
+            _record_platform_details(p, {
+                'discoveryOwner': 'discovery-scanner (AgentCore runtime, with LLM enrichment)',
+                'reason': 'This Lambda cedes native discovery to the scanner so the two never double-write the same agent.',
+                'syncStatusReportedBy': 'discovery-scanner, after each scan it runs. The status and timestamp above are that scan, not this 6-hourly connector sync.',
+                'reEnableWith': '-c deployGovernanceAgents=false',
+            })
             continue
         # Demo-only connectors stay out of a real catalog. Reported rather than silently absent, so
         # a per-connector Discover click explains itself instead of returning zero.
@@ -1833,7 +2117,7 @@ def run_discovery(platforms: list[str] | None = None) -> list[dict]:
             results.append({
                 'platform': p,
                 'skipped': 'simulated connector; deploy with -c seedSampleData=true to load demo agents',
-                'syncedAt': NOW,
+                'syncedAt': _now(),
             })
             _record_sync_outcome(p, 'skipped', '', 'Simulated connector, not enabled',
                                  details={
@@ -1848,7 +2132,7 @@ def run_discovery(platforms: list[str] | None = None) -> list[dict]:
             results.append({
                 'platform': p,
                 'skipped': 'connector is not configured; add credentials in the FlowAMP UI',
-                'syncedAt': NOW,
+                'syncedAt': _now(),
             })
             _record_sync_outcome(p, 'skipped', '', 'Not configured',
                                  details={
@@ -1878,11 +2162,24 @@ def run_discovery(platforms: list[str] | None = None) -> list[dict]:
             elif p == 'aws-org':
                 # Scoped to the member accounts this run could assume into: a locked-out account must
                 # never look like one whose agents were deleted.
-                if _ORG_ACCOUNTS_READ:
+                if _ORG_SCOPES_READ:
                     seen = {a['agentId'] for a in agents}
                     removed = _inactivate_missing(p, seen,
-                                                  scopes_read=set(_ORG_ACCOUNTS_READ),
-                                                  scope_field='accountId')
+                                                  scopes_read=set(_ORG_SCOPES_READ),
+                                                  scope_of=_org_scope_of)
+            elif p == 'native':
+                # Scoped per surface, like Foundry's projects and the org's accounts: a
+                # surface whose listing failed or is unavailable keeps its rows. The
+                # all-or-nothing `not _CONNECTOR_WARNINGS` test below let one surface the
+                # SDK lacks freeze inactivation for all three, permanently.
+                # `agents` must still be non-empty, as before: an empty listing that
+                # "succeeded" (the wrong region, an account-level filter) must not retire
+                # the whole catalog.
+                if _NATIVE_SURFACES_READ and agents:
+                    seen = {a['agentId'] for a in agents}
+                    removed = _inactivate_missing(p, seen,
+                                                  scopes_read=set(_NATIVE_SURFACES_READ),
+                                                  scope_field='source')
             elif p in AUTHORITATIVE_PLATFORMS and agents and not _CONNECTOR_WARNINGS:
                 # Single-scope connectors: a non-empty result proves the API answered, and no
                 # warnings proves nothing was silently dropped.
@@ -1893,7 +2190,7 @@ def run_discovery(platforms: list[str] | None = None) -> list[dict]:
                 'agentsDiscovered': len(agents),
                 'agentsUpdated': updated,
                 'agentsRemoved': removed,
-                'syncedAt': NOW,
+                'syncedAt': _now(),
             }
             # Surface partial failures, e.g. unreachable org accounts, so the UI can warn instead of
             # silently reporting 0 discovered.
@@ -1905,7 +2202,7 @@ def run_discovery(platforms: list[str] | None = None) -> list[dict]:
             logger.info(f"Discovered {len(agents)} agents from {p}, inactivated {removed}")
         except Exception as e:
             logger.error(f"Discovery failed for {p}: {e}")
-            results.append({'platform': p, 'error': str(e), 'syncedAt': NOW})
+            results.append({'platform': p, 'error': str(e), 'syncedAt': _now()})
     return results
 
 
@@ -2107,7 +2404,7 @@ def handler(event, context):
     if http_method == 'GET' and '/status' in path:
         # Counts per platform from DynamoDB (entity rows only, sk='INFO').
         from boto3.dynamodb.conditions import Attr
-        items = table.scan(FilterExpression=Attr('sk').eq('INFO')).get('Items', [])
+        items = _scan_all(table, FilterExpression=Attr('sk').eq('INFO'))
         agents = [i for i in items if not i['agentId'].startswith(('compliance:', 'aop:', 'access:'))]
         summary = {}
         for a in agents:
