@@ -129,3 +129,36 @@ def _clear_config_cache() -> None:
     """Reset the in-process cache. Used in tests to avoid state leakage between cases."""
     global _config_cache
     _config_cache = None
+
+
+# ── Model output ceiling ──────────────────────────────────────────────────────────────
+
+DEFAULT_MAX_TOKENS = 8192
+
+
+def get_max_tokens(logger=None) -> int:
+    """The `max_tokens` every BedrockModel in FlowAMP's agents must be built with.
+
+    Shared so both scanners resolve BEDROCK_MAX_TOKENS identically; it used to be a parser
+    copied into each, with a test whose only job was to catch the copies drifting.
+
+    The env var is an operator escape hatch, so the limit can be raised without a CDK
+    change. It is read from the environment rather than from AppConfig because an
+    unparseable value must not take the runtime down at import. An unusable value (empty,
+    zero, negative, non-integer) falls back to the default with a warning: `max_tokens=0` or
+    `None` would ask Bedrock for its own default again, which is the failure this exists to
+    prevent.
+    """
+    raw = os.environ.get("BEDROCK_MAX_TOKENS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        if logger is not None:
+            logger.warning("BEDROCK_MAX_TOKENS=%r is not a positive integer; using %d",
+                           raw, DEFAULT_MAX_TOKENS)
+        return DEFAULT_MAX_TOKENS
+    return value

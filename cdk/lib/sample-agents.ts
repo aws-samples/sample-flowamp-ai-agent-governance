@@ -132,11 +132,35 @@ export function addSampleHarness(
       resources: ["*"],
     })
   );
-  // A harness enables managed memory by default and provisions the memory resource itself,
-  // named harness_<harnessName>_<suffix>. Without these actions the first invoke fails with
-  // AccessDeniedException on ListEvents, because the harness reads conversation history
-  // before it answers. The AgentCore docs' sample execution-role policy omits memory, so it
-  // must be granted explicitly.
+  // A harness enables managed memory by default and provisions the memory resource itself.
+  // Without these actions the first invoke fails with AccessDeniedException on ListEvents,
+  // because the harness reads conversation history before it answers. The AgentCore docs'
+  // sample execution-role policy omits memory, so it must be granted explicitly.
+  //
+  // The memory resource is named `<harnessName>-<suffix>`, NOT `harness_<harnessName>`. The
+  // `harness_` prefix applies to the backing runtime and its log group, not to memory, so a
+  // pattern built on that prefix matches nothing: the harness still reaches READY and only
+  // the first InvokeHarness reveals it, as an AccessDeniedException on ListEvents.
+  //
+  // For example (ids illustrative), a harness memory named like
+  // `memory/sample_request_intake-AbCdEf1234`, against a harness at
+  // `harness/sample_request_intake-GhIjKl5678`. Note the suffixes differ, so the
+  // memory name cannot be derived from the harness ARN. It matches the documented ARN
+  // pattern for a memory id, `memory/<name>-[a-zA-Z0-9]{10}`.
+  //
+  // Scoped to THIS harness's memory: `memory/<harnessName>-??????????`, where IAM's `?`
+  // matches exactly one character. The CloudFormation schema documents a harness memory id
+  // as `<name>-[a-zA-Z0-9]{10}` (HarnessManagedMemoryConfiguration.Arn). The ten `?` make
+  // it exact: unlike `<name>-*` it cannot reach `<name>_v2-...` or any memory in the
+  // account that FlowAMP did not create. `memory/*` would grant every harness role read
+  // and delete on every AgentCore memory in the account, including those of the agents
+  // FlowAMP governs.
+  //
+  // Not the exact ARN from CfnHarness.attrMemoryManagedMemoryConfigurationArn: the schema
+  // does not say that attribute is populated when memory is left at its default (as here),
+  // and an unpopulated GetAtt fails the deploy.
+  // A miss is not degraded behaviour, it breaks chat on the first message. Keep in step
+  // with team-stack.ts, which grants the same form for the management harness.
   role.addToPrincipalPolicy(
     new iam.PolicyStatement({
       actions: [
@@ -146,7 +170,9 @@ export function addSampleHarness(
         "bedrock-agentcore:DeleteEvent",
         "bedrock-agentcore:RetrieveMemoryRecords",
       ],
-      resources: [`arn:aws:bedrock-agentcore:${region}:${account}:memory/harness_*`],
+      resources: [
+        `arn:aws:bedrock-agentcore:${region}:${account}:memory/${def.harnessName}-??????????`,
+      ],
     })
   );
   // Observability. A harness runs inside AgentCore Runtime, so its logs land under
@@ -196,7 +222,20 @@ export function addSampleHarness(
     harnessName: def.harnessName,
     executionRoleArn: role.roleArn,
     model: {
-      bedrockModelConfig: { modelId: inferenceProfileId, maxTokens: 1024 },
+      // 8192, matching the scanners' _DEFAULT_MAX_TOKENS and the management harness, so one
+      // number governs every agent FlowAMP deploys. It must be set at all: left unset,
+      // Bedrock reserves the model's maximum output budget per call against the account's
+      // token quota and throttles far earlier than real usage warrants.
+      //
+      // These agents' prompts ask for multi-section quantified output (severity reasoning,
+      // impact tables, mitigations), and a harness turns the ceiling into a TERMINAL error
+      // rather than a short answer: Strands raises MaxTokensReachedException on
+      // stop_reason == 'max_tokens', which surfaces to the caller as runtimeClientError with
+      // no partial text. A small ceiling therefore fails these agents outright.
+      //
+      // The per-invocation `maxTokens` on InvokeHarness does not override the configured
+      // value; the harness config is the ceiling.
+      bedrockModelConfig: { modelId: inferenceProfileId, maxTokens: 8192 },
     },
     systemPrompt: [{ text: def.systemPrompt }],
     // These agents declare no tools, but allowedTools defaults to "*", which implicitly

@@ -53,6 +53,8 @@ import { SAMPLE_AGENTS, addSampleHarness } from "./sample-agents";
  *   - `deployGovernanceAgents` (default on) the two scanner runtimes. Setting `=false`
  *     stops compliance auditing and drops the LLM enrichment from discovery, and is the
  *     only way to remove the `uv` synth prerequisite.
+ *   - `deployUi` (default on) the S3 + CloudFront web UI. Setting `=false` leaves an
+ *     API-only deployment, for accounts whose SCPs forbid CloudFront.
  */
 export class TeamStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -99,6 +101,15 @@ export class TeamStack extends cdk.Stack {
     // delivered either way; only distributed traces need this.
     const enableTransactionSearch =
       this.node.tryGetContext("enableTransactionSearch") === "true";
+    // The S3 + CloudFront web UI. On by default.
+    //
+    // `-c deployUi=false` deploys the control plane without a front end: no site bucket, no
+    // distribution, no origin access control, no upload. Everything else is unchanged, so
+    // the API, Cognito, the agents and the scheduled jobs all still work and the ApiUrl
+    // output is the entry point. It exists because a service control policy that denies
+    // `cloudfront:CreateOriginAccessControl` (or CloudFront outright) fails the whole stack,
+    // which otherwise leaves patching this file as the only way in.
+    const deployUi = this.node.tryGetContext("deployUi") !== "false";
 
     // Set inside the core-agents block; wired to API routes below so the UI can
     // trigger the discovery-scanner and compliance-scanner directly.
@@ -210,6 +221,12 @@ export class TeamStack extends cdk.Stack {
     // is deployed, this Lambda when it is not. NATIVE_DISCOVERY_ENABLED tells the Lambda
     // which, so the two never double-write the same agent under different keys.
     const nativeDiscoveryOwnedByLambda = !deployGovernanceAgents;
+    // Declared once and reused by the harness itself, by the memory ARN patterns in its
+    // execution role (which have to match the name AgentCore derives resources from), and by
+    // native discovery below, which must recognise this harness's backing runtime.
+    // Pattern: ^[a-zA-Z][a-zA-Z0-9_]{0,39}$ - underscores, no hyphens.
+    const MANAGEMENT_HARNESS_NAME = "flowamp_management_agent";
+
     // Fixed name so the function can grant itself invoke via a constructed ARN
     // (referencing .functionArn in its own role policy is a circular dependency).
     const discoveryFnName = `${cdk.Stack.of(this).stackName}-DiscoveryHandler`;
@@ -229,6 +246,14 @@ export class TeamStack extends cdk.Stack {
         ORG_DISCOVERY_ENABLED: enableOrgDiscovery ? "true" : "false",
         ORG_DISCOVERY_ROLE_NAME: orgDiscoveryRoleName,
         ...(orgDiscoveryRegions ? { ORG_DISCOVERY_REGIONS: orgDiscoveryRegions } : {}),
+        // The harnesses this stack deploys, so native discovery recognises their backing
+        // runtimes (`harness_<name>`) exactly when ListHarnesses is unavailable, instead of
+        // guessing from the prefix. Otherwise FlowAMP's own management harness would trip the
+        // prefix guard on every run and switch off runtime inactivation on this path.
+        FLOWAMP_HARNESS_NAMES: [
+          MANAGEMENT_HARNESS_NAME,
+          ...(deploySampleAgents ? SAMPLE_AGENTS.map((d) => d.harnessName) : []),
+        ].join(","),
       },
       timeout: cdk.Duration.seconds(300),
     });
@@ -767,11 +792,6 @@ export class TeamStack extends cdk.Stack {
       description: "Execution role assumed by the FlowAMP management harness.",
     });
 
-    // Declared once and reused by the harness itself and by the memory ARN patterns in its
-    // execution role, which have to match the name AgentCore derives resources from.
-    // Pattern: ^[a-zA-Z][a-zA-Z0-9_]{0,39}$ - underscores, no hyphens.
-    const MANAGEMENT_HARNESS_NAME = "flowamp_management_agent";
-
     // Model inference, scoped to the one inference profile plus the underlying
     // foundation model in every region the profile can route to.
     harnessRole.addToPrincipalPolicy(
@@ -802,7 +822,8 @@ export class TeamStack extends cdk.Stack {
     // The memory resource is named `<harnessName>-<suffix>` — NOT `harness_<harnessName>`.
     // The `harness_` prefix applies to the backing runtime and its log group, not to
     // memory, so a pattern built on that prefix never matches and chat fails on the very
-    // first message. Both patterns are granted so either naming resolves.
+    // first message. Scoped to this harness's own memory id, `<name>-` plus exactly ten
+    // characters; see sample-agents.ts for why that form, and why not `memory/*`.
     harnessRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: [
@@ -813,8 +834,7 @@ export class TeamStack extends cdk.Stack {
           "bedrock-agentcore:RetrieveMemoryRecords",
         ],
         resources: [
-          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:memory/${MANAGEMENT_HARNESS_NAME}-*`,
-          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:memory/harness_${MANAGEMENT_HARNESS_NAME}-*`,
+          `arn:aws:bedrock-agentcore:${this.region}:${this.account}:memory/${MANAGEMENT_HARNESS_NAME}-??????????`,
         ],
       })
     );
@@ -886,7 +906,12 @@ export class TeamStack extends cdk.Stack {
           // Always set maxTokens. Left unset, Bedrock reserves the model's maximum output
           // budget per call against the account's token quota, which throttles far earlier
           // than real usage warrants.
-          maxTokens: 4096,
+          //
+          // 8192, matching the scanners' _DEFAULT_MAX_TOKENS and the sample harnesses, so one
+          // number governs every agent FlowAMP deploys. A harness turns the ceiling into a
+          // terminal MaxTokensReachedException rather than a truncated reply, so a chat answer
+          // that overruns it fails outright with no partial text; see sample-agents.ts.
+          maxTokens: 8192,
         },
       },
       systemPrompt: [
@@ -1029,6 +1054,20 @@ Use the available tools to fetch real data before responding.`,
           ],
         })
       );
+      // Never FlowAMP's own runtimes (flowampDiscoveryScanner, flowampComplianceScanner):
+      // this role's model reads text discovered agents control, so an injected instruction
+      // must not be able to drive FlowAMP itself. A name pattern rather than the runtime ARN,
+      // which would create a role -> runtime dependency cycle. Explicit Deny wins over the
+      // runtime/* Allow above; invoke_agent refuses the same in code.
+      discoveryScanner.addToRolePolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.DENY,
+          actions: ["bedrock-agentcore:InvokeAgentRuntime"],
+          resources: [
+            `arn:aws:bedrock-agentcore:${this.region}:${this.account}:runtime/flowamp*`,
+          ],
+        })
+      );
       // Fleet-enumeration and cross-inventory reads. The List actions do not support
       // resource-level permissions, and bedrock:GetAgent inspects the separate Bedrock
       // Agents Classic inventory. All read-only, so "*" is required.
@@ -1051,6 +1090,22 @@ Use the available tools to fetch real data before responding.`,
           resources: ["*"],
         })
       );
+      // Emit the scanner's own operational metric (AgentsDiscovered, in
+      // FlowAMP/DiscoveryScanner). The alpha Runtime construct already attaches a
+      // PutMetricData statement, but it is conditioned on
+      // `cloudwatch:namespace = bedrock-agentcore`, so it authorizes only the AgentCore
+      // platform's own metrics and denies ours. PutMetricData has no resource types, so a
+      // namespace condition on Resource "*" is the only way to scope it.
+      // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/iam-cw-condition-keys-namespace.html
+      discoveryScanner.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["cloudwatch:PutMetricData"],
+          resources: ["*"],
+          conditions: {
+            StringEquals: { "cloudwatch:namespace": "FlowAMP/DiscoveryScanner" },
+          },
+        })
+      );
       new cdk.CfnOutput(this, "DiscoveryScannerRuntimeArn", {
         value: discoveryScanner.agentRuntimeArn,
       });
@@ -1066,9 +1121,39 @@ Use the available tools to fetch real data before responding.`,
         runtime: lambda.Runtime.PYTHON_3_12,
         handler: "index.handler",
         code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "discovery-scan-invoker")),
-        environment: { DISCOVERY_SCANNER_ARN: discoveryScanner.agentRuntimeArn },
-        timeout: cdk.Duration.seconds(120),
+        environment: {
+          DISCOVERY_SCANNER_ARN: discoveryScanner.agentRuntimeArn,
+          // The invoker returns 202 before the scan runs, so the HTTP response cannot carry
+          // the outcome. It stamps the platform sentinel row (agentId=FLOWAMP_PLATFORMS,
+          // sk=PLATFORM#native) that GET /discovery/connectors reads back: 'running' before
+          // the long invoke, and 'error' when the invoke itself throws, which is precisely
+          // the case where the scanner never started and so can report nothing itself.
+          AGENT_TABLE_NAME: agentTable.tableName,
+        },
+        // Sized for the scan, not the API call: the API path returns 202 in under a second,
+        // and this ceiling only bounds the async self-invocation that drains the scanner.
+        // A scan takes 60-90s on a small fleet and grows with it (batched commits over a large
+        // fleet run for minutes). It is longer than the client's 570s read timeout so a
+        // silent stall is caught and stamped before the function dies; a scan that keeps
+        // streaming past it is simply cut off, with retries off below so it is not re-run.
+        timeout: cdk.Duration.seconds(600),
+        // Never retried by Lambda. The async self-invocation that drains the scan would
+        // otherwise be re-run twice on a failure or timeout (Lambda's default), each retry
+        // a second concurrent scan of the same fleet. A failed scan is surfaced on the
+        // status row and re-run by an operator or the next schedule, not silently doubled.
+        retryAttempts: 0,
       });
+      // One action on one row, written as an explicit statement rather than
+      // agentTable.grantWriteData: that helper also grants Put/Delete/BatchWrite and extends
+      // the resource list to `<table>/index/*`, which this function never touches and which
+      // cdk-nag reports as AwsSolutions-IAM5. The stamp swallows its own errors, so
+      // without this grant a scan still runs and the failure reporting silently does nothing.
+      discoveryScanInvokerFn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["dynamodb:UpdateItem"],
+          resources: [agentTable.tableArn],
+        })
+      );
       discoveryScanInvokerFn.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["bedrock-agentcore:InvokeAgentRuntime"],
@@ -1133,6 +1218,20 @@ Use the available tools to fetch real data before responding.`,
           ],
         })
       );
+      // Never FlowAMP's own runtimes (flowampDiscoveryScanner, flowampComplianceScanner):
+      // this role's model reads text discovered agents control, so an injected instruction
+      // must not be able to drive FlowAMP itself. A name pattern rather than the runtime ARN,
+      // which would create a role -> runtime dependency cycle. Explicit Deny wins over the
+      // runtime/* Allow above; invoke_agent refuses the same in code.
+      complianceScanner.addToRolePolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.DENY,
+          actions: ["bedrock-agentcore:InvokeAgentRuntime"],
+          resources: [
+            `arn:aws:bedrock-agentcore:${this.region}:${this.account}:runtime/flowamp*`,
+          ],
+        })
+      );
       // Read-only inspection APIs the deterministic checks call. All List/Get/Describe -
       // the scanner never mutates the agents it audits. These are cross-service
       // enumeration/read actions (Bedrock, CloudWatch, Logs, CloudTrail, Lambda,
@@ -1164,6 +1263,25 @@ Use the available tools to fetch real data before responding.`,
             "config:GetComplianceDetailsByResource",
           ],
           resources: ["*"],
+        })
+      );
+      // Emit the scanner's own operational metrics (AuditError and friends, in
+      // FlowAMP/ComplianceScanner). The alpha Runtime construct already attaches a
+      // PutMetricData statement, but it is conditioned on
+      // `cloudwatch:namespace = bedrock-agentcore`, so it authorizes only the AgentCore
+      // platform's own metrics and denies ours. PutMetricData has no resource types, so a
+      // namespace condition on Resource "*" is the only way to scope it.
+      // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/iam-cw-condition-keys-namespace.html
+      //
+      // Both emit sites in the scanner swallow their own exceptions on purpose, so a missing
+      // grant drops the metrics rather than corrupting an audit result.
+      complianceScanner.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["cloudwatch:PutMetricData"],
+          resources: ["*"],
+          conditions: {
+            StringEquals: { "cloudwatch:namespace": "FlowAMP/ComplianceScanner" },
+          },
         })
       );
       new cdk.CfnOutput(this, "ComplianceScannerRuntimeArn", {
@@ -1306,7 +1424,15 @@ Use the available tools to fetch real data before responding.`,
         handler: "index.handler",
         code: lambda.Code.fromAsset(path.join(assetsSrc, "lambda", "compliance-scan-invoker")),
         environment: { COMPLIANCE_SCANNER_ARN: complianceScanner.agentRuntimeArn },
-        timeout: cdk.Duration.seconds(120),
+        // Sized for the audit the async self-invocation drains, not the API call (which
+        // returns 202 at once); longer than the client's 570s read timeout, which catches a
+        // silent stall before the function dies.
+        timeout: cdk.Duration.seconds(600),
+        // Never retried by Lambda. The async self-invocation that drains the scan would
+        // otherwise be re-run twice on a failure or timeout (Lambda's default), each retry
+        // a second concurrent scan of the same fleet. A failed scan is surfaced on the
+        // status row and re-run by an operator or the next schedule, not silently doubled.
+        retryAttempts: 0,
       });
       complianceScanInvokerFn.addToRolePolicy(
         new iam.PolicyStatement({
@@ -1481,7 +1607,12 @@ Use the available tools to fetch real data before responding.`,
     });
 
     // ─── S3 + CloudFront (created before the API so CORS can scope to the CloudFront origin) ───
-    const siteBucket = new s3.Bucket(this, "DemoSiteBucket", {
+    // Both stay undefined under `-c deployUi=false`; the API below falls back to a wildcard
+    // CORS origin and the DemoUrl output is dropped.
+    let siteBucket: s3.Bucket | undefined;
+    let distribution: cloudfront.Distribution | undefined;
+    if (deployUi) {
+    siteBucket = new s3.Bucket(this, "DemoSiteBucket", {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       // Not autoDeleteObjects: that helper empties the bucket once, which cannot work for a
       // bucket that is its own server-access-log target, since its own DELETE calls generate
@@ -1617,7 +1748,7 @@ Use the available tools to fetch real data before responding.`,
     // first on the way down.
     siteDrain.node.addDependency(siteBucket);
 
-    const distribution = new cloudfront.Distribution(this, "DemoDistribution", {
+    distribution = new cloudfront.Distribution(this, "DemoDistribution", {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -1631,15 +1762,29 @@ Use the available tools to fetch real data before responding.`,
     // instead: it switches access logging off before sweeping, so the bucket cannot refill
     // while the distribution is still being deleted.
 
-    // The UI (served from CloudFront) calls this API cross-origin, so the
-    // CloudFront distribution domain is the only legitimate origin. Scoping to it
+    } // end web UI (deployUi)
+
+    // With the UI deployed, it is served from CloudFront and calls this API cross-origin, so
+    // the CloudFront distribution domain is the only legitimate origin. Scoping to it
     // (instead of Cors.ALL_ORIGINS) follows least-privilege for CORS.
-    const allowedOrigin = `https://${distribution.distributionDomainName}`;
+    //
+    // With `-c deployUi=false` there is no distribution and no origin to name: whoever
+    // hosts the front end does so outside this stack, at an address unknown at synth time.
+    // The fallback is a wildcard rather than a guess, which is safe here because CORS is not
+    // what protects this API. Every data route carries the Cognito authorizer, the browser
+    // sends no ambient credentials (a wildcard origin cannot be combined with
+    // Access-Control-Allow-Credentials, and the UI authenticates with a bearer IdToken, not
+    // a cookie), so a page on another origin still has no token to call with. The preflight
+    // is kept rather than dropped so a self-hosted front end works at all; dropping it would
+    // remove every OPTIONS method and block any browser client outright.
+    const allowedOrigins = distribution
+      ? [`https://${distribution.distributionDomainName}`]
+      : apigateway.Cors.ALL_ORIGINS;
 
     const api = new apigateway.RestApi(this, "AgentApi", {
       restApiName: "Agent Management API",
       defaultCorsPreflightOptions: {
-        allowOrigins: [allowedOrigin],
+        allowOrigins: allowedOrigins,
         // Must list every method any route accepts. The connector configuration API uses
         // PUT to save and DELETE to remove; omitting them here makes the browser's
         // preflight reject the request before it is sent, so the call never reaches API
@@ -1795,6 +1940,9 @@ Use the available tools to fetch real data before responding.`,
     }
 
     // ─── Deploy the static UI to the site bucket (bucket + distribution defined above) ───
+    // Skipped entirely under `-c deployUi=false`: there is no bucket to deploy into. It has
+    // to be here rather than up with the bucket because config.js carries the API URL.
+    if (siteBucket) {
     new s3deploy.BucketDeployment(this, "DeploySite", {
       sources: [
         s3deploy.Source.asset(path.join(assetsSrc, "site")),
@@ -1825,12 +1973,36 @@ Use the available tools to fetch real data before responding.`,
       // fresh, empty-cache distribution at provision time, so there is nothing to invalidate.
       // After any later UI change, invalidate manually.
     });
+    } // end static UI upload (deployUi)
 
     // ─── Outputs ───
-    new cdk.CfnOutput(this, "DemoUrl", {
-      value: `https://${distribution.distributionDomainName}`,
-      description: "Agent Management Platform URL",
-    });
+    // DemoUrl is omitted under `-c deployUi=false`, the same way SampleAgentHarnessArns and
+    // the scanner ARNs are omitted when their own flags are off: an output naming a URL that
+    // does not resolve is worse than no output.
+    if (distribution) {
+      new cdk.CfnOutput(this, "DemoUrl", {
+        value: `https://${distribution.distributionDomainName}`,
+        description: "Agent Management Platform URL",
+      });
+    } else {
+      // The operator now has to host the front end themselves, so tell them what origin the
+      // API's CORS preflight advertises; a mismatch here is otherwise only visible as a
+      // blocked request in a browser console.
+      new cdk.CfnOutput(this, "ApiAllowedOrigin", {
+        value: allowedOrigins.join(","),
+        description:
+          "Origin(s) the API's CORS preflight allows. No UI is deployed (deployUi=false); " +
+          "host assetsSrc/site yourself and point it at ApiUrl.",
+      });
+      // Nothing generates config.js when the upload is skipped, so the app-client id has to
+      // be published: UserPoolId alone is not enough to sign in. Not a secret (the client is
+      // created with generateSecret: false). Only emitted on this path so the default
+      // deployment's output set is unchanged.
+      new cdk.CfnOutput(this, "UserPoolClientId", {
+        value: userPoolClient.userPoolClientId,
+        description: "Cognito app client id, for the config.js of a self-hosted UI.",
+      });
+    }
     new cdk.CfnOutput(this, "ApiUrl", {
       value: api.url,
       description: "API Gateway URL (POST /chat)",

@@ -65,6 +65,20 @@ _UPDATABLE_FIELDS = {
     'name', 'description', 'category', 'owner', 'system', 'platform',
     'platformAgentId', 'runtime', 'costCenter', 'businessUnit', 'tags',
 }
+# The subset a human edit LOCKS by adding it to humanVerifiedFields, which both discovery
+# implementations honour (the Lambda's upsert, the scanner's enrichment). Without this
+# write those guards would never engage. Identity and
+# run-state facts (system, platform, platformAgentId, runtime) are deliberately excluded:
+# they are discovery's to report, and pinning one would let a manual edit fight the
+# platform forever. Status is never locked here either, see update_lifecycle.
+_LOCKED_ON_EDIT = {'name', 'description', 'category', 'owner', 'costCenter',
+                   'businessUnit', 'tags'}
+
+
+def _with_locks(existing_item, fields):
+    """The row's humanVerifiedFields plus `fields`, order-stable and without duplicates."""
+    current = list((existing_item or {}).get('humanVerifiedFields') or [])
+    return current + sorted(f for f in set(fields) if f not in current)
 
 CORS_HEADERS = {
     'Content-Type': 'application/json',
@@ -143,9 +157,30 @@ def _resp(status, body):
     }
 
 
+def _scan_all(tbl, **kwargs) -> list:
+    """Every item a Scan matches, across ALL pages.
+
+    A Scan returns at most 1 MB per call, and AgentTable is single-table: INFO rows share it
+    with EVENT#, AUDIT#, REVIEW#, COST# and COMPLIANCE# rows, so it passes 1 MB within weeks.
+    A single-page Scan then silently returned a subset, so agents went missing from lists,
+    scoring and inactivation with no error anywhere. tests/test_pagination.py keeps every
+    Scan in this module routed through here.
+    """
+    items, start_key = [], None
+    while True:
+        page_kwargs = dict(kwargs)
+        if start_key:
+            page_kwargs['ExclusiveStartKey'] = start_key
+        resp = tbl.scan(**page_kwargs)
+        items.extend(resp.get('Items', []))
+        start_key = resp.get('LastEvaluatedKey')
+        if not start_key:
+            return items
+
+
 def scan_info():
     """All canonical entity rows (sk='INFO'). Excludes COST#/EVENT# rows."""
-    return table.scan(FilterExpression=Attr('sk').eq('INFO')).get('Items', [])
+    return _scan_all(table, FilterExpression=Attr('sk').eq('INFO'))
 
 
 def get_agents(platform=None):
@@ -186,16 +221,7 @@ def get_all_latest_audits():
     row per agentId; sk = 'AUDIT#<ISO-ts>' sorts lexically, so a string compare picks the most
     recent. A scan rather than a GSI fan-out because the corpus is one row per agent per daily run.
     """
-    items, start_key = [], None
-    while True:
-        kwargs = {'FilterExpression': Attr('sk').begins_with('AUDIT#')}
-        if start_key:
-            kwargs['ExclusiveStartKey'] = start_key
-        resp = table.scan(**kwargs)
-        items.extend(resp.get('Items', []))
-        start_key = resp.get('LastEvaluatedKey')
-        if not start_key:
-            break
+    items = _scan_all(table, FilterExpression=Attr('sk').begins_with('AUDIT#'))
     latest = {}
     for it in items:
         aid = it.get('agentId')
@@ -219,17 +245,7 @@ def get_costs(days=30):
         days = 30
     cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).strftime('%Y-%m-%d')
     flt = Attr('sk').begins_with('COST#') & Attr('sk').gte('COST#' + cutoff)
-    items, start_key = [], None
-    while True:
-        kwargs = {'FilterExpression': flt}
-        if start_key:
-            kwargs['ExclusiveStartKey'] = start_key
-        resp = table.scan(**kwargs)
-        items.extend(resp.get('Items', []))
-        start_key = resp.get('LastEvaluatedKey')
-        if not start_key:
-            break
-    return items
+    return _scan_all(table, FilterExpression=flt)
 
 
 # ── AgentCore Evaluations read path (CloudWatch, not DynamoDB) ──
@@ -604,7 +620,7 @@ def get_events(event_type=None, agent_id=None, severity=None, limit=200):
 
     A single-table substitute for an eventType-timestamp GSI query.
     """
-    items = table.scan(FilterExpression=Attr('sk').begins_with('EVENT#')).get('Items', [])
+    items = _scan_all(table, FilterExpression=Attr('sk').begins_with('EVENT#'))
     if event_type:
         items = [i for i in items if i.get('eventType') == event_type]
     if agent_id:
@@ -688,6 +704,15 @@ def update_agent(agent_id, body, actor='system'):
         names['#a%d' % idx] = key
         values[':v%d' % idx] = val
         parts.append('#a%d = :v%d' % (idx, idx))
+    # Record the human edit as verified, so the next discovery sync and the scanner's
+    # enrichment keep it. Read first to merge with the existing locks; the write below is
+    # still conditional on the row existing.
+    to_lock = set(allowed) & _LOCKED_ON_EDIT
+    if to_lock:
+        existing_item = table.get_item(Key={'agentId': agent_id, 'sk': 'INFO'}).get('Item')
+        names['#hv'] = 'humanVerifiedFields'
+        values[':hv'] = _with_locks(existing_item, to_lock)
+        parts.append('#hv = :hv')
 
     try:
         resp = table.update_item(
@@ -817,6 +842,12 @@ def update_lifecycle(agent_id, body, actor='system'):
         update_expr += ', #owner = :owner'
         expr_names['#owner'] = 'owner'
         expr_values[':owner'] = supplied_owner
+        # A human named this owner, so discovery must never replace it. Status itself is
+        # deliberately NOT locked: that would stop discovery retiring an approved agent that
+        # was genuinely deleted, and approved agents are the ones that matter most.
+        update_expr += ', #hv = :hv'
+        expr_names['#hv'] = 'humanVerifiedFields'
+        expr_values[':hv'] = _with_locks(item, {'owner'})
     # Refresh the platform's run state as part of the activation write, so the row the UI gets back
     # reflects the platform now rather than the last scheduled scan. Folded into the same conditional
     # write, so a concurrent status change discards it instead of leaving a fresh platform reading on
