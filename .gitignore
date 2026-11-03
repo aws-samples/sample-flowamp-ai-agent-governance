@@ -9,14 +9,7 @@ cdk.out/
 __pycache__/
 *.pyc
 
-# Holmes content-security-review scanner cache
+# Local tool caches and working files, not part of the sample
 .holmes/
-
-# Security-review artifacts — INTERNAL only (rebuttals, restricted notes).
-# Must NOT be published to aws-samples.
 .security-review/
-
-# License assessment / BOM — INTERNAL Distribution Review artifact only.
-# Cites Amazon-internal tools and processes; must NOT be published to aws-samples.
-# Keep locally to submit to the review; never commit to the public repo.
 docs/bom/
